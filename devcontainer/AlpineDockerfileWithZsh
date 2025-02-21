@@ -1,0 +1,107 @@
+FROM alpine:latest
+
+ENV HOME=/root
+
+# Install Python and required dependencies
+RUN apk update && apk add --no-cache \
+    curl \
+    git \
+    vim \
+    python3 \
+    py3-pip \
+    postgresql-client \
+    postgresql-dev \
+    gpg \
+    wget \
+    zsh \
+    gcc \
+    musl-dev \
+    bash \
+    shadow \
+    tmux
+
+    
+# Install Oh My Zsh non-interactively
+RUN curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh | zsh
+    
+SHELL ["/bin/zsh", "-c"]
+
+# Set Python3 as default and create virtual environment
+RUN python -m venv /opt/devenv && \
+    . /opt/devenv/bin/activate && \
+    pip install poetry==1.8.3
+
+# Install Vault
+RUN wget -O /tmp/vault.zip https://releases.hashicorp.com/vault/1.15.2/vault_1.15.2_linux_amd64.zip && \
+    unzip /tmp/vault.zip -d /usr/local/bin && \
+    rm /tmp/vault.zip
+
+# Set the environment variables
+#ENV HOME=/root
+# Set additional environment variables
+ENV RSCRIPTS=/root/rscripts
+ENV KUBECTL_PATH="$HOME/.config/kubectl"
+ENV KREW_ROOT="$HOME/.config/krew"
+ENV PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT}/bin:/root/google-cloud-sdk/bin/"
+
+# Install kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
+    chmod +x kubectl && \
+    mkdir -p $KUBECTL_PATH && \
+    mv kubectl $KUBECTL_PATH/kubectl
+
+# Install krew
+RUN cd "$(mktemp -d)" && \
+    OS="$(uname | tr '[:upper:]' '[:lower:]')" && \
+    ARCH="$(uname -m | sed -e 's/^arm64$/arm64/' -e 's/^aarch64$/arm64/' -e 's/^x86_64$/amd64/')" && \
+    KREW="krew-${OS}_${ARCH}" && \
+    curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/latest/download/${KREW}.tar.gz" && \
+    tar zxvf "${KREW}.tar.gz" && \
+    ./"${KREW}" install krew
+
+RUN echo 'export KREW_ROOT="$KREW_ROOT"' >> $ZDOTDIR/.zshrc && \
+    echo 'export PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT}/bin:/root/google-cloud-sdk/bin/"' >> $ZDOTDIR/.zshrc
+# Install kubectl-ns plugin
+RUN kubectl krew install ns
+
+
+# Install gcloud SDK
+RUN curl -sSL https://sdk.cloud.google.com | zsh
+
+# Install gke-gcloud-auth-plugin
+RUN gcloud components install gke-gcloud-auth-plugin --quiet
+
+# Install flux
+RUN curl -s https://fluxcd.io/install.sh | zsh
+
+# Install okteto
+RUN curl https://get.okteto.com -sSfL | sh # this line fails with zsh
+
+#RUN apk add git-extras
+RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-syntax-highlighting
+RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-autosuggestions.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-autosuggestions
+RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-completions.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-completions
+RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-history-substring-search.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-history-substring-search
+RUN source $ZDOTDIR/.zshrc && git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$ZSH/custom}/themes/powerlevel10k 
+ADD ./rscripts/.p10k.zsh /root/.config/zsh/.p10k.zsh
+
+RUN source $ZDOTDIR/.zshrc && \
+    omz theme set powerlevel10k/powerlevel10k && \
+    #omz theme set agnoster && \
+    #omz plugin enable git && \
+    omz plugin enable git-extras && \
+    omz plugin enable zsh-syntax-highlighting && \
+    omz plugin enable zsh-autosuggestions && \
+    omz plugin enable zsh-completions && \
+    omz plugin enable zsh-history-substring-search && \
+    omz plugin enable common-aliases && \
+    omz plugin enable kubectl && \
+    omz plugin enable aws && \
+    omz plugin enable docker && \
+    omz plugin enable fluxcd && \
+    omz plugin enable gcloud
+
+
+# Add setup script to zshrc
+RUN echo "source $RSCRIPTS/setup_dev_terminal.sh" >> $ZDOTDIR/.zshrc
+RUN echo "Hello World"

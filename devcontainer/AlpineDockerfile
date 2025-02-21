@@ -1,0 +1,75 @@
+FROM alpine:latest
+
+# Install Python and required dependencies
+RUN apk update && apk add --no-cache \
+    curl \
+    git \
+    vim \
+    python3 \
+    py3-pip \
+    postgresql-client \
+    postgresql-dev \
+    gpg \
+    wget \
+    bash \
+    gcc \
+    musl-dev
+
+SHELL ["/bin/bash", "-c"]
+
+# Set Python3 as default and create virtual environment
+RUN python -m venv /opt/devenv && \
+    . /opt/devenv/bin/activate && \
+    pip install poetry==1.8.3
+
+# Install Vault
+RUN wget -O /tmp/vault.zip https://releases.hashicorp.com/vault/1.15.2/vault_1.15.2_linux_amd64.zip && \
+    unzip /tmp/vault.zip -d /usr/local/bin && \
+    rm /tmp/vault.zip
+
+# Set the environment variables
+ENV HOME=/root
+ENV KUBECTL_PATH="$HOME/.vs-kubernetes/tools/kubectl"
+ENV KREW_ROOT="$HOME/.krew"
+ENV PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT:-$HOME/.krew}/bin"
+
+# Install kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
+    chmod +x kubectl && \
+    mkdir -p $KUBECTL_PATH && \
+    mv kubectl $KUBECTL_PATH/kubectl
+
+# Install krew
+RUN cd "$(mktemp -d)" && \
+    OS="$(uname | tr '[:upper:]' '[:lower:]')" && \
+    ARCH="$(uname -m | sed -e 's/^arm64$/arm64/' -e 's/^aarch64$/arm64/' -e 's/^x86_64$/amd64/')" && \
+    KREW="krew-${OS}_${ARCH}" && \
+    curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/latest/download/${KREW}.tar.gz" && \
+    tar zxvf "${KREW}.tar.gz" && \
+    ./"${KREW}" install krew && \
+    echo 'export KREW_ROOT="$HOME/.krew"' >> ~/.bashrc && \
+    echo 'export PATH="$KREW_ROOT/bin:$PATH"' >> ~/.bashrc && \
+    export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
+
+# Install kubectl-ns plugin
+RUN kubectl krew install ns
+
+# Set additional environment variables
+ENV RSCRIPTS=/root/rscripts
+ENV KUBECONFIG="$RSCRIPTS/kubeconfig"
+ENV PATH="$PATH:$KUBECTL_PATH:/root/google-cloud-sdk/bin/"
+
+# Install gcloud SDK
+RUN curl -sSL https://sdk.cloud.google.com | bash
+
+# Install gke-gcloud-auth-plugin
+RUN gcloud components install gke-gcloud-auth-plugin --quiet
+
+# Install flux
+RUN curl -s https://fluxcd.io/install.sh | bash
+
+# Install okteto
+RUN curl https://get.okteto.com -sSfL | sh
+
+# Add setup script to bashrc
+RUN echo "source $RSCRIPTS/setup_dev_terminal.sh" >> /root/.bashrc
