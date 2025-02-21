@@ -1,0 +1,4 @@
+export DOCKER_FILE=AlpineDockerfileWithZsh
+export IMAGE_NAME=alpine-dev-container-zsh
+export IMAGE_TAG=latest
+export DEV_CONTAINER=alpine-dev-container-zsh
