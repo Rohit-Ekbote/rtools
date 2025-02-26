@@ -1,82 +1,6 @@
-gcloud_login() {
-    # Check if already authenticated
-    if gcloud auth list --filter=status:ACTIVE --format="value(account)" >/dev/null 2>&1; then
-        echo "Already logged into gcloud as $(gcloud config get-value account)"
-        return 0
-    fi
-
-    # Attempt login
-    if gcloud auth login; then
-        echo "Successfully logged into gcloud as $(gcloud config get-value account)"
-    else
-        echo "Failed to log into gcloud"
-        return 1
-    fi
-}
-
 log_current_context() {
     echo "Current context: $(kubectl config current-context)"
     echo "Current namespace: $(kubectl config view --minify --output 'jsonpath={..namespace}')"
-}
-
-set_env() {
-    if [ -z "$1" ]; then
-        echo "Please provide an environment name"
-        return 1
-    fi
-    export RW_ENV="$1"
-
-    if [ -z "$2" ]; then
-        echo "Using default region: us-central1"
-    fi
-    export RW_REGION="${2:-us-central1}"
-
-    # gcloud container clusters get-credentials platform-cluster --project runwhen-nonprod-kyle --region us-central1
-    gcloud config set project $RW_ENV
-    #gcloud config set compute/region $RW_REGION
-    #gcloud container clusters get-credentials platform-cluster --project $RW_ENV
-    # list all clusters, so we can see if we have set correct project and region
-    gcloud container clusters list
-}
-
-get_cluster_credentials() {
-    
-    if [ -z "$1" ]; then
-        echo "Please provide a cluster context name"
-        return 1
-    fi
-    
-    gcloud container clusters get-credentials $1 --project $RW_ENV --region $RW_REGION
-    # Verify the context was set
-    log_current_context
-}
-
-
-set_namespace() {
-    if [ -z "$1" ]; then
-        echo "Please provide a namespace"
-        return 1
-    fi
-    kubectl config set-context --current --namespace="$1"
-    # Verify the namespace was set
-    log_current_context
-}
-
-suspend_namespace_flux() {
-    if [ -z "$1" ]; then
-        echo "Please provide a namespace to suspend from Flux"
-        return 1
-    fi
-    
-    # Suspend all Kustomizations in the namespace
-    echo "Suspending Kustomizations in namespace $1..."
-    flux suspend kustomization --namespace "$1" --all
-    
-    # Suspend all HelmReleases in the namespace
-    echo "Suspending HelmReleases in namespace $1..."
-    flux suspend helmrelease --namespace "$1" --all
-    
-    echo "Flux resources suspended in namespace $1"
 }
 
 
@@ -84,19 +8,62 @@ cd $SRC_BASE_PATH
 
 # Banner
 echo "Welcome to the development environment"
-echo "Current directory: $(pwd)"
-echo "Current namespace: $(kubectl config view --minify --output 'jsonpath={..namespace}')"
-echo "Current context: $(kubectl config current-context)"
+#echo "Current directory: $(pwd)"
+#echo "Current namespace: $(kubectl config view --minify --output 'jsonpath={..namespace}')"
+#echo "Current context: $(kubectl config current-context)"
+echo "Following are some useful commands"
+echo "---------------------------------------------------------------------------------"
+echo "Login to google cloud"
+echo "gcloud auth login"
+echo "---------------------------------------------------------------------------------"
+echo "Set env/project"
+echo "gcloud config set project <projectID>"
+echo "e.g.  gcloud config set project runwhen-nonprod-wolf"
+echo "---------------------------------------------------------------------------------"
+echo "Check gcloud auth by listing clusters"
+echo "gcloud container clusters"
+echo "---------------------------------------------------------------------------------"
+echo "Get cluster credentials"
+echo "gcloud container clusters get-credentials --project <projectID> --region <region> <clusterName>"
+echo "e.g.  gcloud container clusters get-credentials --project runwhen-nonprod-wolf --region us-central1 platform-cluster"
+echo "notes: This also sets context to this cluster"
+echo "---------------------------------------------------------------------------------"
+echo "List contexts"
+echo "kubectl config get-contexts"
+echo "---------------------------------------------------------------------------------"
+echo "Suspend namespace from flux"
+echo "flux suspend kustomization <namespaceID>"
+echo "e.g.  flux suspend kustomization runwhen-backend-services"
+echo "---------------------------------------------------------------------------------"
+echo "Set replicaset count to 1"
+echo "flux suspend kustomization <namespaceID>"
+echo "e.g.  flux suspend kustomization runwhen-backend-services"
+echo "notes: Do this before you okteto into pod which guarantees that yours is only instance running"
+echo "---------------------------------------------------------------------------------"
+echo "Okteto into service"
+echo "okteto up <serviceName>"
+echo "e.g.   okteto up papi"
+echo "notes: You need to run this command from service code folder which has service specific okteto.yml file"
+echo "---------------------------------------------------------------------------------"
+echo "Get postgres password"
+echo "kubectl -n backend-services get secrets core-pguser-core  -o go-template='{{range $k,$v := .data}}{{printf "%s: " $k}}{{if not $v}}{{$v}}{{else}}{{$v | base64decode}}{{end}}{{"\n"}}{{end}}'"
+echo "notes: Command assumes that your current context is platform cluster"
+echo "---------------------------------------------------------------------------------"
+echo "Forward postgres port to local machine"
+echo "kubectl -n backend-services port-forward svc/core-pgadmin 5050 --address=0.0.0.0"
+echo "notes: After this open http://localhost:5000" to open pgbouncer, username: pg@core and password: <recived in `kubectl -n backend-services get secrets core-pguser-core ...` command>
+echo "---------------------------------------------------------------------------------"
 
 # login to gcloud
 # gcloud_login
 
 # set environment
 # set_env runwhen-nonprod-wolf
+# gcloud config set project runwhen-nonprod-wolf
 
 # get cluster credentials
 # get_cluster_credentials platform-cluster
-# gcloud container clusters get-credentials --project runwhen-nonprod-wolf --region us-central1
+# gcloud container clusters get-credentials --project runwhen-nonprod-wolf --region us-central1 platform-cluster
 
 # set context to specific namespace
 # kubectl config set-context --current --namespace=backend-services
