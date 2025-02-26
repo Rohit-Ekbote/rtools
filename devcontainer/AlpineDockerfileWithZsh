@@ -18,7 +18,8 @@ RUN apk update && apk add --no-cache \
     musl-dev \
     bash \
     shadow \
-    tmux
+    tmux \
+    helm
 
     
 # Install Oh My Zsh non-interactively
