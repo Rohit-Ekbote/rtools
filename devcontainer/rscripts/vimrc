@@ -1,0 +1,43 @@
+set nocompatible
+set hidden
+set hlsearch
+set cursorline
+
+
+" UI stuff
+syntax on
+set background=dark
+set noshowmode
+set backspace=indent,eol,start
+set conceallevel=0
+" colorscheme PaperColor
+
+" indentation stuff
+set autoindent
+set smartindent
+set pastetoggle=<F2>
+
+" enable folding and stuff
+set foldmethod=indent
+set foldnestmax=10
+set nofoldenable
+set foldlevel=2
+
+" tabs and spaces
+set tabstop=4
+set shiftwidth=4
+set expandtab
+
+" mouse support
+set mouse=a
+
+" shortcuts for tabs and splits
+map ,e :e <C-R>=expand("%:p:h") . "/" <CR>
+map ,t :tabe <C-R>=expand("%:p:h") . "/" <CR>
+map ,s :split <C-R>=expand("%:p:h") . "/" <CR>
+map ,v :vs <C-R>=expand("%:p:h") . "/" <CR>
+
+" shortcuts for ctrl-a and ctrl-e in insert mode
+inoremap <C-e> <Esc>A
+inoremap <C-a> <Esc>I
+

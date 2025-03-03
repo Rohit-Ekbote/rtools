@@ -1,0 +1,5 @@
+defaultLocation: 40687f1e-f9da-47ce-8693-25dd03a4cdb0
+papiURL: https://papi.watcher.runwhen.com
+token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzQwNjY5MTE4LCJqdGkiOiI4NTgzMTU1YjRjZmY0MTlmYWZiY2NjMjY2YjUwZTdjYiIsInVzZXJfaWQiOjE5MX0.i2hBOZ7eq_iDU87szRxOgfm6U3saA32EYkYQmYD59rE
+workspaceName: rdebug-localstack
+workspaceOwnerEmail: rohit.ekbote@runwhen.com

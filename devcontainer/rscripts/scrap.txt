@@ -1,0 +1,18 @@
+kubectl create secret generic runner-registration-token --from-literal=token="reg_FCCO87+S2M20oLpvwwkPZujTA1GJQgHcB+AMn250rtISNEe5sTbrJWsv5n39A3+FmuVF/tZwZxS6hpLMlGMEY+NNafyE9VrWUoeVE8Px26hZtrn4msZFJUG5GiK+DuEzHCyEgDJzlCrbFIwRcl1kukjSIfDJbFw2fXUZO6dUJLDWMJtIhc3ueigT6K+xjPjeAm09bHxOs7GxxHAMOsVX+E5pUq4agPcwMgecls6RitfjditeSCp/I/xuoCvXBvbmbbtMmm4GX5CKfm2QoVMpYj9dfgORJo0xa4r4XHNinRQw27cLtoDp1TmOE9LsT3Cr+c4CnrMeZ8sO4fE=" -n $namespace
+
+
+kubectl create secret generic uploadinfo --from-file=uploadInfo.yaml=[local-upload-path]/uploadInfo.yaml -n $namespace
+
+
+helm install runwhen-local runwhen-contrib/runwhen-local  \
+    --set runwhenLocal.autoRun.uploadEnabled=true \
+    --set runwhenLocal.uploadInfo.secretProvided.enabled=true \
+    --set runwhenLocal.uploadInfo.secretProvided.secretName=uploadinfo \
+    --set runwhenLocal.uploadInfo.secretProvided.secretKey=uploadInfo.yaml \
+    --set runwhenLocal.uploadInfo.secretProvided.secretPath=uploadInfo.yaml \
+    --set workspaceName=rdebug-localstack \
+    --set runner.enabled=true \
+    --set runner.controlAddr="https://runner.watcher.runwhen.com" \
+    --set runner.metrics.url="https://runner-cortex-tenant.watcher.runwhen.com/push"
+
+helm upgrade runwhen-local runwhen-contrib/runwhen-local --set runner.controlAddr="https://runner.watcher.runwhen.com" --namespace rw-localstack
