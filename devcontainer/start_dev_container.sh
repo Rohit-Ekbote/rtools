@@ -4,7 +4,7 @@ source vars
 
 export RTOOLS_PATH=/Users/rohitekbote/wd/code/github.com/Rohit-Ekbote/rtools
 
-export HOST_CODE_PATH=/Users/rohitekbote/wd/github.com/
+export HOST_CODE_PATH=/Users/rohitekbote/wd/code/github.com/
 export CODE_PATH=/root/code
 export RSCRIPTS_PATH=$CODE_PATH/Rohit-Ekbote/rtools/devcontainer/rscripts
 

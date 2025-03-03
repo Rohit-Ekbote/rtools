@@ -40,7 +40,7 @@ RUN wget -O /tmp/vault.zip https://releases.hashicorp.com/vault/1.15.2/vault_1.1
 # Set the environment variables
 #ENV HOME=/root
 # Set additional environment variables
-ENV RSCRIPTS=/root/rscripts
+ENV RSCRIPTS=/root/code/Rohit-Ekbote/rtools/devcontainer/rscripts
 ENV KUBECTL_PATH="$HOME/.config/kubectl"
 ENV KREW_ROOT="$HOME/.config/krew"
 ENV PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT}/bin:/root/google-cloud-sdk/bin/"
@@ -73,7 +73,8 @@ RUN curl -sSL https://sdk.cloud.google.com | zsh
 RUN gcloud components install gke-gcloud-auth-plugin --quiet
 
 # Install flux
-RUN curl -s https://fluxcd.io/install.sh | zsh
+#RUN curl -s https://fluxcd.io/install.sh | zsh
+RUN curl -fsSL https://fluxcd.io/install.sh | bash -s -- /usr/local/bin
 
 # Install okteto
 RUN curl https://get.okteto.com -sSfL | sh # this line fails with zsh
@@ -84,7 +85,8 @@ RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-autosug
 RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-completions.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-completions
 RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-history-substring-search.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-history-substring-search
 RUN source $ZDOTDIR/.zshrc && git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$ZSH/custom}/themes/powerlevel10k 
-ADD ./rscripts/.p10k.zsh /root/.config/zsh/.p10k.zsh
+ADD ./rscripts/p10k.zsh /root/.config/zsh/.p10k.zsh
+ADD ./rscripts/vimrc /root/.config/zsh/vimrc
 
 RUN source $ZDOTDIR/.zshrc && \
     omz theme set powerlevel10k/powerlevel10k && \
