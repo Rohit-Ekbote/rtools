@@ -2,3 +2,7 @@ export DOCKER_FILE=AlpineDockerfileWithZsh
 export IMAGE_NAME=alpine-dev-container-zsh
 export IMAGE_TAG=latest
 export DEV_CONTAINER=alpine-dev-container-zsh
+
+export HOST_CODE_PATH=/Users/rohitekbote/wd/code/github.com/
+export HOST_RTOOLS_PATH=/Users/rohitekbote/wd/code/github.com/Rohit-Ekbote/rtools
+export HOST_MOUNT_PATH=/Users/rohitekbote/wd/md

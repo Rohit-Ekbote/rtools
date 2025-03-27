@@ -1,0 +1,1366 @@
+NAME: runwhen-local
+LAST DEPLOYED: Tue Mar 18 06:12:31 2025
+NAMESPACE: rdebug-nc
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+USER-SUPPLIED VALUES:
+runner:
+  controlAddr: https://runner.tiger.dev.runwhen.com
+  enabled: true
+  metrics:
+    url: https://runner-cortex-tenant.tiger.dev.runwhen.com/push
+runwhenLocal:
+  autoRun:
+    uploadEnabled: true
+  uploadInfo:
+    secretProvided:
+      enabled: true
+      secretKey: uploadInfo.yaml
+      secretName: uploadinfo
+      secretPath: uploadInfo.yaml
+workspaceName: rdebug-nc
+
+COMPUTED VALUES:
+affinity: {}
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - all
+  readOnlyRootFilesystem: true
+  seccompProfile:
+    type: RuntimeDefault
+fullnameOverride: ""
+imagePullSecrets: []
+nameOverride: ""
+nodeSelector: {}
+opentelemetry-collector:
+  additionalLabels: {}
+  affinity: {}
+  alternateConfig: {}
+  annotations: {}
+  autoscaling:
+    behavior: {}
+    enabled: false
+    maxReplicas: 10
+    minReplicas: 1
+    targetCPUUtilizationPercentage: 80
+  clusterRole:
+    annotations: {}
+    clusterRoleBinding:
+      annotations: {}
+      name: ""
+    create: false
+    name: ""
+    rules: []
+  command:
+    extraArgs:
+    - --feature-gates=-pkg.translator.prometheus.NormalizeName
+    name: otelcol
+  config:
+    exporters:
+      debug: {}
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+    processors:
+      batch: {}
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+    receivers:
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:14250
+          thrift_compact:
+            endpoint: ${env:MY_POD_IP}:6831
+          thrift_http:
+            endpoint: ${env:MY_POD_IP}:14268
+      otlp:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:4317
+          http:
+            endpoint: ${env:MY_POD_IP}:4318
+      prometheus:
+        config:
+          scrape_configs:
+          - job_name: opentelemetry-collector
+            scrape_interval: 10s
+            static_configs:
+            - targets:
+              - ${env:MY_POD_IP}:8888
+      zipkin:
+        endpoint: ${env:MY_POD_IP}:9411
+    service:
+      extensions:
+      - health_check
+      pipelines:
+        logs:
+          exporters:
+          - debug
+          processors:
+          - memory_limiter
+          - batch
+          receivers:
+          - otlp
+        metrics:
+          exporters:
+          - debug
+          processors:
+          - memory_limiter
+          - batch
+          receivers:
+          - otlp
+          - prometheus
+        traces:
+          exporters:
+          - debug
+          processors:
+          - memory_limiter
+          - batch
+          receivers:
+          - otlp
+          - jaeger
+          - zipkin
+      telemetry:
+        metrics:
+          address: ${env:MY_POD_IP}:8888
+  configMap:
+    create: false
+    existingName: otel-collector
+  dnsConfig: {}
+  dnsPolicy: ""
+  extraContainers: []
+  extraEnvs: []
+  extraEnvsFrom: []
+  extraManifests: []
+  extraVolumeMounts:
+  - mountPath: /tls
+    name: tls-secret-volume
+    readOnly: true
+  extraVolumes:
+  - name: tls-secret-volume
+    secret:
+      secretName: runner-metrics-tls
+  fullnameOverride: otel-collector
+  global: {}
+  hostAliases: []
+  hostNetwork: false
+  image:
+    digest: ""
+    pullPolicy: IfNotPresent
+    repository: otel/opentelemetry-collector
+    tag: 0.120.0
+  imagePullSecrets: []
+  ingress:
+    additionalIngresses: []
+    enabled: false
+  initContainers: []
+  lifecycleHooks: {}
+  livenessProbe:
+    httpGet:
+      path: /
+      port: 13133
+  mode: deployment
+  nameOverride: ""
+  namespaceOverride: ""
+  networkPolicy:
+    allowIngressFrom: []
+    annotations: {}
+    egressRules: []
+    enabled: false
+    extraIngressRules: []
+  nodeSelector: {}
+  podAnnotations: {}
+  podDisruptionBudget:
+    enabled: false
+  podLabels: {}
+  podMonitor:
+    enabled: false
+    extraLabels: {}
+    metricsEndpoints:
+    - port: metrics
+  podSecurityContext: {}
+  ports:
+    jaeger-compact:
+      containerPort: 6831
+      enabled: true
+      hostPort: 6831
+      protocol: UDP
+      servicePort: 6831
+    jaeger-grpc:
+      containerPort: 14250
+      enabled: true
+      hostPort: 14250
+      protocol: TCP
+      servicePort: 14250
+    jaeger-thrift:
+      containerPort: 14268
+      enabled: true
+      hostPort: 14268
+      protocol: TCP
+      servicePort: 14268
+    metrics:
+      containerPort: 8888
+      enabled: false
+      protocol: TCP
+      servicePort: 8888
+    otlp:
+      appProtocol: grpc
+      containerPort: 4317
+      enabled: true
+      hostPort: 4317
+      protocol: TCP
+      servicePort: 4317
+    otlp-http:
+      containerPort: 4318
+      enabled: true
+      hostPort: 4318
+      protocol: TCP
+      servicePort: 4318
+    zipkin:
+      containerPort: 9411
+      enabled: true
+      hostPort: 9411
+      protocol: TCP
+      servicePort: 9411
+  presets:
+    clusterMetrics:
+      enabled: false
+    hostMetrics:
+      enabled: false
+    kubeletMetrics:
+      enabled: false
+    kubernetesAttributes:
+      enabled: false
+      extractAllPodAnnotations: false
+      extractAllPodLabels: false
+    kubernetesEvents:
+      enabled: false
+    logsCollection:
+      enabled: false
+      includeCollectorLogs: false
+      maxRecombineLogSize: 102400
+      storeCheckpoints: false
+  priorityClassName: ""
+  prometheusRule:
+    defaultRules:
+      enabled: false
+    enabled: false
+    extraLabels: {}
+    groups: []
+  readinessProbe:
+    httpGet:
+      path: /
+      port: 13133
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 50m
+      memory: 64Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+  revisionHistoryLimit: 10
+  rollout:
+    rollingUpdate: {}
+    strategy: RollingUpdate
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - all
+    readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
+  service:
+    annotations: {}
+    type: ClusterIP
+  serviceAccount:
+    annotations: {}
+    create: false
+    name: otel-collector
+  serviceMonitor:
+    enabled: false
+    extraLabels: {}
+    metricRelabelings: []
+    metricsEndpoints:
+    - port: metrics
+    relabelings: []
+  shareProcessNamespace: false
+  startupProbe: {}
+  statefulset:
+    persistentVolumeClaimRetentionPolicy:
+      enabled: false
+      whenDeleted: Retain
+      whenScaled: Retain
+    podManagementPolicy: Parallel
+    volumeClaimTemplates: []
+  tolerations: []
+  topologySpreadConstraints: []
+  useGOMEMLIMIT: true
+platformArch: amd64
+platformType: kubernetes
+podAnnotations: {}
+podSecurityContext: {}
+proxy:
+  enabled: false
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: 127.0.0.1,localhost,$($KUBERNETES_SERVICE_HOST),pushgateway
+proxyCA: {}
+registryOverride: ""
+runner:
+  configMap:
+    apiVersion: config.runwhen.com/v1
+    create: true
+    kind: RunnerConfig
+    name: runner-config
+    raw: {}
+  controlAddr: https://runner.tiger.dev.runwhen.com
+  enabled: true
+  extraEnv: {}
+  image:
+    registry: ""
+    repository: ""
+    tag: ""
+  log:
+    format: console
+    level: info
+  metrics:
+    url: https://runner-cortex-tenant.tiger.dev.runwhen.com/push
+  resources:
+    EKS_Fargate:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+    default:
+      limits:
+        cpu: 600m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+  runEnvironment:
+    blockedSecrets: []
+    deployment:
+      affinity: {}
+      annotations: {}
+      nodeName: ""
+      nodeSelector: {}
+      podAnnotations: {}
+      resources:
+        EKS_Fargate:
+          limits:
+            cpu: 300m
+            memory: 196Mi
+          requests:
+            cpu: 300m
+            memory: 196Mi
+        default:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+      tolerations: []
+    extraEnv: {}
+    image:
+      pullPolicy: ""
+      pullSecret: ""
+      registry: ""
+      repository: ""
+    pod:
+      affinity: {}
+      annotations: {}
+      nodeName: ""
+      nodeSelector: {}
+      resources:
+        EKS_Fargate:
+          limits:
+            cpu: 300m
+            memory: 256Mi
+          requests:
+            cpu: 300m
+            memory: 256Mi
+        default:
+          limits:
+            cpu: "1"
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+      runAsJob: false
+      tolerations: []
+    proxy: {}
+    proxyCA: {}
+    secretProviders: {}
+    secretsProvided: {}
+    volumeMounts: {}
+    volumes: {}
+  tolerations: []
+  volumeMounts: {}
+  volumes: {}
+runwhenLocal:
+  autoRun:
+    discoveryInterval: 14400
+    uploadEnabled: true
+    uploadMergeMode: keep-uploaded
+  clusterName: default
+  debugLogs: false
+  discoveryKubeconfig:
+    inClusterAuth:
+      createKubeconfigSecret: true
+      enabled: true
+    secretProvided:
+      enabled: false
+  enabled: true
+  image:
+    pullPolicy: Always
+    registry: ""
+    repository: ""
+    tag: latest
+  ingress:
+    annotations: {}
+    className: ""
+    enabled: false
+    hosts:
+    - host: chart-example.local
+      paths:
+      - path: /
+        pathType: Prefix
+    tls: []
+  resources:
+    EKS_Fargate:
+      limits:
+        cpu: "2"
+        memory: 1024Mi
+      requests:
+        cpu: "2"
+        memory: 1024Mi
+    default:
+      limits:
+        cpu: "1"
+        memory: 1024Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+  service:
+    port: 8081
+    type: ClusterIP
+  serviceAccount:
+    annotations: {}
+    create: true
+    name: runwhen-local
+  serviceAccountRoles:
+    advancedClusterRole:
+      enabled: false
+      rules: []
+    clusterRoleView:
+      enabled: true
+    namespaceRole:
+      enabled: false
+      namespaces: []
+      rules:
+      - apiGroups:
+        - ""
+        resources:
+        - '*'
+        verbs:
+        - get
+        - watch
+        - list
+  terminal:
+    disabled: true
+  tolerations: []
+  uploadInfo:
+    secretProvided:
+      enabled: true
+      secretKey: uploadInfo.yaml
+      secretName: uploadinfo
+      secretPath: uploadInfo.yaml
+  volumeMounts: {}
+  volumes: {}
+  workspaceInfo:
+    configMap:
+      create: true
+      data:
+        cloudConfig:
+          kubernetes:
+            inClusterAuth: true
+        codeCollections: []
+        custom:
+          aws_access_key_id: AWS_ACCESS_KEY_ID
+          aws_secret_access_key: AWS_SECRET_ACCESS_KEY
+          cloud_provider: none
+          gcp_ops_suite_sa: none
+          gcp_project_id: none
+          kubeconfig_secret_name: k8s:file@secret/kubeconfig:kubeconfig
+          kubernetes_distribution_binary: kubectl
+        defaultLOD: detailed
+        defaultLocation: none
+        workspaceOwnerEmail: tester@my-company.com
+      name: workspace-builder
+    existingConfigMapName: ""
+    useExistingConfigMap: false
+tolerations: []
+workspaceName: rdebug-nc
+
+HOOKS:
+MANIFEST:
+---
+# Source: runwhen-local/templates/local-serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: runwhen-local
+  labels:
+    helm.sh/chart: runwhen-local-0.3.0
+    app.kubernetes.io/name: runwhen-local
+    app.kubernetes.io/instance: runwhen-local
+    app.kubernetes.io/version: "0.10.0"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: runwhen-local/templates/runner-otel-collector-service-account.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: otel-collector
+  name: otel-collector
+  namespace: rdebug-nc
+---
+# Source: runwhen-local/templates/runner-service-account.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: runner
+  name: runner
+  namespace: rdebug-nc
+---
+# Source: runwhen-local/templates/local-serviceaccount.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: runwhen-local-token
+  annotations:
+    kubernetes.io/service-account.name: runwhen-local
+type: kubernetes.io/service-account-token
+---
+# Source: runwhen-local/templates/local-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workspace-builder
+data:
+  workspaceInfo.yaml: | 
+    workspaceName: rdebug-nc
+    cloudConfig:
+      kubernetes:
+        inClusterAuth: true
+    codeCollections: []
+    custom:
+      aws_access_key_id: AWS_ACCESS_KEY_ID
+      aws_secret_access_key: AWS_SECRET_ACCESS_KEY
+      cloud_provider: none
+      gcp_ops_suite_sa: none
+      gcp_project_id: none
+      kubeconfig_secret_name: k8s:file@secret/kubeconfig:kubeconfig
+      kubernetes_distribution_binary: kubectl
+    defaultLOD: detailed
+    defaultLocation: none
+    workspaceOwnerEmail: tester@my-company.com
+---
+# Source: runwhen-local/templates/runner-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runner-config
+  labels:
+    app: runner
+data:
+  config.yaml: |
+    apiVersion: config.runwhen.com/v1
+    kind: RunnerConfig
+    global:
+      log:
+        format: console
+        level: info
+      controlAddr: https://runner.tiger.dev.runwhen.com
+      metricsAddr: https://runner-cortex-tenant.tiger.dev.runwhen.com/push
+      proxy:
+        enabled: false
+        httpProxy: ""
+        httpsProxy: ""
+        noProxy:  "127.0.0.1,localhost,$($KUBERNETES_SERVICE_HOST),pushgateway"
+    environment:
+      imagePullSecret: ""
+      imagePullPolicy: ""
+      imageRegistry: ""
+      imageRepository: ""
+      kubernetes:
+        proxy:
+          enabled: false
+          httpProxy: ""
+          httpsProxy: ""
+          noProxy: "127.0.0.1,localhost,$($KUBERNETES_SERVICE_HOST),pushgateway"
+          proxyCA: ""
+        deployment:
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+
+          # ------------------------
+          # Container-level securityContext (Deployment)
+          # If runEnvironment.containerSecurityContext is set, use it;
+          # else if global .Values.containerSecurityContext is set, use that;
+          # else fall back to your default snippet.
+          # ------------------------
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - all
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+
+          # ------------------------
+          # Pod-level securityContext (Deployment)
+          # If runEnvironment.securityContext is set, use it;
+          # else if global .Values.podSecurityContext is set, use that.
+          # ------------------------
+
+        pod:
+          runAsJob: false
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+
+          # ------------------------
+          # Container-level securityContext (Pod)
+          # If runEnvironment.containerSecurityContext is set, use it;
+          # else if global .Values.containerSecurityContext is set, use that;
+          # else fall back to your default snippet.
+          # ------------------------
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - all
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+
+          # ------------------------
+          # Pod-level securityContext (Pod)
+          # If runEnvironment.securityContext is set, use it;
+          # else if global .Values.podSecurityContext is set, use that.
+          # ------------------------
+---
+# Source: runwhen-local/templates/runner-otel-collector-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+  namespace: rdebug-nc
+  labels:
+    app: otel-collector
+data:
+  relay: |
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+
+    receivers:
+      otlp:
+        protocols:
+          http: 
+            endpoint: ${env:MY_POD_IP}:4318
+          grpc:
+            endpoint: ${env:MY_POD_IP}:4317
+
+    exporters:
+      prometheusremotewrite:
+        endpoint: https://runner-cortex-tenant.tiger.dev.runwhen.com/push
+        tls:
+          ca_file: "/tls/ca.crt"
+          cert_file: "/tls/tls.crt"
+          key_file: "/tls/tls.key"
+          insecure_skip_verify: true
+        external_labels:
+          workspace: rdebug-nc
+
+    processors:
+      batch:
+
+    service:
+      pipelines:
+        metrics/otlp:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheusremotewrite]
+
+      extensions:
+        - health_check
+
+      telemetry:
+        logs:
+          level: debug
+---
+# Source: runwhen-local/templates/local-clusterviewer.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rdebug-nc-runwhen-local-view-crb
+  namespace: rdebug-nc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: runwhen-local
+    namespace: rdebug-nc
+---
+# Source: runwhen-local/templates/local-serviceaccount.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: runwhen-local-sa-local-view
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "events", "configmaps", "services", "replicationcontrollers", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+---
+# Source: runwhen-local/templates/local-serviceaccount.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: runwhen-local-sa-secret-manage
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "update", "delete", "create"]
+---
+# Source: runwhen-local/templates/runner-otel-collector-service-account.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app: otel-collector
+  name: otel-collector-role
+  namespace: rdebug-nc
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - extensions
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+# - apiGroups:
+#   - ""
+#   - discovery.k8s.io
+#   - networking.k8s.io
+#   resources:
+#   - endpoints
+#   - endpointslices
+#   - pods
+#   - services
+#   verbs:
+#   - get
+#   - list
+#   - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - pods/log
+  verbs:
+  - get
+  - list
+  - watch
+---
+# Source: runwhen-local/templates/runner-service-account.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app: runner
+  name: runner-role
+  namespace: rdebug-nc
+rules:
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups: 
+  - ""
+  resources:
+  - pods
+  - pods/exec
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - update
+---
+# Source: runwhen-local/templates/local-serviceaccount.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: runwhen-local-sa-local-view-rb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: runwhen-local-sa-local-view
+subjects:
+  - kind: ServiceAccount
+    name: runwhen-local
+    namespace: rdebug-nc
+---
+# Source: runwhen-local/templates/local-serviceaccount.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: runwhen-local-sa-secret-manage-rb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: runwhen-local-sa-secret-manage
+subjects:
+  - kind: ServiceAccount
+    name: runwhen-local
+    namespace: rdebug-nc
+---
+# Source: runwhen-local/templates/runner-otel-collector-service-account.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app: otel-collector
+  name: otel-collector-rolebinding
+  namespace: rdebug-nc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: otel-collector-role
+subjects:
+- kind: ServiceAccount
+  name: otel-collector
+  namespace: rdebug-nc
+---
+# Source: runwhen-local/templates/runner-service-account.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app: runner
+  name: runner-rolebinding
+  namespace: rdebug-nc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: runner-role
+subjects:
+- kind: ServiceAccount
+  name: runner
+  namespace: rdebug-nc
+---
+# Source: runwhen-local/charts/opentelemetry-collector/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: rdebug-nc
+  labels:
+    helm.sh/chart: opentelemetry-collector-0.117.1
+    app.kubernetes.io/name: opentelemetry-collector
+    app.kubernetes.io/instance: runwhen-local
+    app.kubernetes.io/version: "0.120.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: standalone-collector
+    component: standalone-collector
+spec:
+  type: ClusterIP
+  ports:
+    
+    - name: jaeger-compact
+      port: 6831
+      targetPort: 6831
+      protocol: UDP
+    - name: jaeger-grpc
+      port: 14250
+      targetPort: 14250
+      protocol: TCP
+    - name: jaeger-thrift
+      port: 14268
+      targetPort: 14268
+      protocol: TCP
+    - name: otlp
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+      appProtocol: grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: zipkin
+      port: 9411
+      targetPort: 9411
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: opentelemetry-collector
+    app.kubernetes.io/instance: runwhen-local
+    component: standalone-collector
+  internalTrafficPolicy: Cluster
+---
+# Source: runwhen-local/templates/local-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: runwhen-local
+  labels:
+    helm.sh/chart: runwhen-local-0.3.0
+    app.kubernetes.io/name: runwhen-local
+    app.kubernetes.io/instance: runwhen-local
+    app.kubernetes.io/version: "0.10.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - name: mkdocs
+      protocol: TCP
+      port: 8081
+      targetPort: 8081
+    - name: django
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app.kubernetes.io/name: runwhen-local
+    app.kubernetes.io/instance: runwhen-local
+---
+# Source: runwhen-local/charts/opentelemetry-collector/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: rdebug-nc
+  labels:
+    helm.sh/chart: opentelemetry-collector-0.117.1
+    app.kubernetes.io/name: opentelemetry-collector
+    app.kubernetes.io/instance: runwhen-local
+    app.kubernetes.io/version: "0.120.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: standalone-collector
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: runwhen-local
+      component: standalone-collector
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        checksum/config: 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b
+        
+      labels:
+        app.kubernetes.io/name: opentelemetry-collector
+        app.kubernetes.io/instance: runwhen-local
+        component: standalone-collector
+        
+    spec:
+      
+      serviceAccountName: otel-collector
+      securityContext:
+        {}
+      containers:
+        - name: opentelemetry-collector
+          command:
+            - /otelcol
+          args:
+            - --config=/conf/relay.yaml
+            - --feature-gates=-pkg.translator.prometheus.NormalizeName
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - all
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          image: "otel/opentelemetry-collector:0.120.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            
+            - name: jaeger-compact
+              containerPort: 6831
+              protocol: UDP
+            - name: jaeger-grpc
+              containerPort: 14250
+              protocol: TCP
+            - name: jaeger-thrift
+              containerPort: 14268
+              protocol: TCP
+            - name: otlp
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: zipkin
+              containerPort: 9411
+              protocol: TCP
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+            - name: GOMEMLIMIT
+              value: "51MiB"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          resources:
+            limits:
+              cpu: 50m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          volumeMounts:
+            - mountPath: /conf
+              name: opentelemetry-collector-configmap
+            - mountPath: /tls
+              name: tls-secret-volume
+              readOnly: true
+      volumes:
+        - name: opentelemetry-collector-configmap
+          configMap:
+            name: otel-collector
+            items:
+              - key: relay
+                path: relay.yaml
+        - name: tls-secret-volume
+          secret:
+            secretName: runner-metrics-tls
+      hostNetwork: false
+---
+# Source: runwhen-local/templates/local-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runwhen-local
+  labels:
+    helm.sh/chart: runwhen-local-0.3.0
+    app.kubernetes.io/name: runwhen-local
+    app.kubernetes.io/instance: runwhen-local
+    app.kubernetes.io/version: "0.10.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: runwhen-local
+      app.kubernetes.io/instance: runwhen-local
+  template:
+    metadata:
+      labels:
+          app: runwhen-local
+          app.kubernetes.io/name: runwhen-local
+          app.kubernetes.io/instance: runwhen-local
+    spec:
+      
+      serviceAccountName: runwhen-local
+      automountServiceAccountToken: true
+      securityContext:
+        {}
+      containers:
+        - name: runwhen-local
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - all
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          image: "ghcr.io/runwhen-contrib/runwhen-local:latest"
+          imagePullPolicy: Always
+          env: 
+          - name: TMPDIR
+            value: /tmp   
+          - name: AUTORUN_WORKSPACE_BUILDER_INTERVAL
+            value: "14400"
+          - name: RW_LOCAL_TERMINAL_DISABLED
+            value: "true"
+          - name: RW_LOCAL_UPLOAD_ENABLED
+            value: "true"
+          - name: RW_LOCAL_UPLOAD_MERGE_MODE
+            value: "keep-uploaded"
+          - name: RW_CREATE_KUBECONFIG_SECRET
+            value: "true"
+          - name: KUBERNETES_CLUSTER_NAME
+            value: default
+          ports:
+            - name: mkdocs
+              containerPort: 8081
+              protocol: TCP
+            - name: django
+              containerPort: 8000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: mkdocs
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 20
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 5
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1024Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+          - name: shared-volume
+            mountPath: "/shared"
+          - name: tmpdir
+            mountPath: "/tmp"
+          - name: configmap-volume
+            mountPath: "/shared/workspaceInfo.yaml"
+            subPath: "workspaceInfo.yaml"
+          - name: upload-secret-volume
+            mountPath: "/shared/uploadInfo.yaml"
+            subPath: "uploadInfo.yaml"
+      volumes:
+      - name: shared-volume
+        emptyDir: {}
+      - name: tmpdir
+        emptyDir: {}
+      - name: upload-secret-volume
+        secret:
+          secretName: uploadinfo
+          items:
+            - key: uploadInfo.yaml
+              path: uploadInfo.yaml
+      - name: configmap-volume
+        configMap:
+          name: workspace-builder
+---
+# Source: runwhen-local/templates/runner-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner
+  labels:
+    
+    helm.sh/chart: runwhen-local-0.3.0
+    app.kubernetes.io/name: runwhen-local
+    app.kubernetes.io/instance: runwhen-local
+    app.kubernetes.io/version: "0.10.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: runner
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        
+        app.kubernetes.io/name: runwhen-local
+        app.kubernetes.io/instance: runwhen-local
+        app: runner
+    spec:
+      # Pod-level securityContext (if any)
+      
+
+      serviceAccount: runner
+      serviceAccountName: runner
+      automountServiceAccountToken: true
+
+      containers:
+        - name: runner
+          image: "us-docker.pkg.dev/runwhen-nonprod-shared/public-images/runner:latest"
+          imagePullPolicy: Always
+          # Container-level securityContext (if you want to share the same helper as local):
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - all
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+
+          resources:
+            limits:
+              cpu: 600m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+
+          env:
+            - name: RUNNER_CONTROL_ADDR
+              value: "https://runner.tiger.dev.runwhen.com"
+            - name: RUNNER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+          volumeMounts:
+            - name: runner-config-volume
+              mountPath: "/etc/runwhen/runner/config.yaml"
+              subPath: "config.yaml"
+
+      volumes:
+        - name: runner-config-volume
+          configMap:
+            name: runner-config
+
