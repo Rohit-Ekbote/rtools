@@ -1,8 +1,21 @@
 log_current_context() {
-    echo "Current context: $(kubectl config current-context)"
-    echo "Current namespace: $(kubectl config view --minify --output 'jsonpath={..namespace}')"
+    #echo "Current context: $(kubectl config current-context)"
+    #echo "Current namespace: $(kubectl config view --minify --output 'jsonpath={..namespace}')"
+    echo "$(kubectl config current-context) / $(kubectl config view --minify --output 'jsonpath={..namespace}')"
 }
 
+k_get_contexts() {
+    #kubectl config get-contexts -o=name
+    kubectl config get-contexts --no-headers | awk '{print ($1 == "*" ? "[ACTIVE] " $2 : $2)}'
+}
+
+k_use_context() {
+    kubectl config use-context $1
+}
+
+get_worksync_status() {
+	kubectl get worksync $1 -n flux-system -o custom-columns="READY:.status.conditions[?(@.type=='Ready')].status,REASON:.status.conditions[?(@.type=='Ready')].reason,LAST_APPLIED:.status.lastAppliedRevision,LAST_ATTEMPTED:.status.lastAttemptedRevision,INDEX_STATUS:.status.indexStatus.status,INDEX_FINISHED:.status.indexStatus.lastIndexFinishedAt,LastHandledReconcileAt:.status.lastHandledReconcileAt"
+}
 
 echo "Welcome to the development environment"
 echo "Any time use help_banner to see useful commands"
@@ -47,12 +60,12 @@ help_banner() {
     echo "notes: You need to run this command from service code folder which has service specific okteto.yml file"
     echo "---------------------------------------------------------------------------------"
     echo "Get postgres password"
-    echo "kubectl -n backend-services get secrets core-pguser-core -o 'go-template={{range \$k,\$v := .data}}{{printf \"%s: \" \$k}}{{if not \$v}}{{\$v}}{{else}}{{\$v | base64decode}}{{end}}{{\"\\n\"}}{{end}}'"
+    echo "kubectl -n backend-services get secrets core-pguser-core -o 'go-template={{range \$k,\$v := .data}}{{printf \"%s: \" \$k}}{{if not \$v}}{{\$v}}{{else}}{{\$v | base64decode}}{{end}}{{\"\\\\n\"}}{{end}}'"
     echo "notes: Command assumes that your current context is platform cluster"
     echo "---------------------------------------------------------------------------------"
     echo "Forward postgres port to local machine"
     echo "kubectl -n backend-services port-forward svc/core-pgadmin 5050 --address=0.0.0.0"
-    echo "notes: After this open http://localhost:5000" to open pgbouncer, username: pg@core and password: recived in "kubectl -n backend-services get secrets core-pguser-core ..." command
+    echo "notes: After this open http://localhost:5000" to open pgbouncer, username: core@pgo and password: recived in "kubectl -n backend-services get secrets core-pguser-core ..." command
     echo "---------------------------------------------------------------------------------"
 }
 

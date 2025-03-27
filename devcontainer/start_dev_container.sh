@@ -2,14 +2,10 @@
 
 source vars
 
-export RTOOLS_PATH=/Users/rohitekbote/wd/code/github.com/Rohit-Ekbote/rtools
-
-export HOST_CODE_PATH=/Users/rohitekbote/wd/code/github.com/
-export CODE_PATH=/root/code
-export RSCRIPTS_PATH=$CODE_PATH/Rohit-Ekbote/rtools/devcontainer/rscripts
-
-#export HOST_PLATFORM_SRC_PATH=/Users/rohitekbote/wd/468-platform
-#export PLATFORM_SRC_PATH=${CODE_PATH}/468-platform
+export CODE_PATH=/home/rundev/code
+export RTOOLS_PATH=/home/rundev/rtools
+export MOUNT_PATH=/home/rundev/md
+export RSCRIPTS=$RTOOLS_PATH/devcontainer/rscripts
 
 export HOST_PORT=3105
 export PORT=3105
@@ -61,10 +57,12 @@ fi
 
 
 docker run -dit \
-    -e RSCRIPTS_PATH=$RSCRIPTS_PATH \
-    -e CODE_PATH=$CODE_PATH \
+    --privileged \
+    -e RSCRIPTS=$RTOOLS_PATH/devcontainer/rscripts \
     -e PORT=$PORT \
     -v $HOST_CODE_PATH:$CODE_PATH \
+    -v $HOST_MOUNT_PATH:$MOUNT_PATH \
+    -v $HOST_RTOOLS_PATH:$RTOOLS_PATH \
     -p $HOST_PORT:$PORT \
     -p $DB_FORWARD_HOST_PORT:$DB_FORWARD_PORT \
     --name $DEV_CONTAINER \

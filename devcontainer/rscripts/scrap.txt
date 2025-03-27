@@ -1,18 +1,44 @@
-kubectl create secret generic runner-registration-token --from-literal=token="reg_FCCO87+S2M20oLpvwwkPZujTA1GJQgHcB+AMn250rtISNEe5sTbrJWsv5n39A3+FmuVF/tZwZxS6hpLMlGMEY+NNafyE9VrWUoeVE8Px26hZtrn4msZFJUG5GiK+DuEzHCyEgDJzlCrbFIwRcl1kukjSIfDJbFw2fXUZO6dUJLDWMJtIhc3ueigT6K+xjPjeAm09bHxOs7GxxHAMOsVX+E5pUq4agPcwMgecls6RitfjditeSCp/I/xuoCvXBvbmbbtMmm4GX5CKfm2QoVMpYj9dfgORJo0xa4r4XHNinRQw27cLtoDp1TmOE9LsT3Cr+c4CnrMeZ8sO4fE=" -n $namespace
+export wsname=j-r-localstack
+export namespace=$wsname
 
 
-kubectl create secret generic uploadinfo --from-file=uploadInfo.yaml=[local-upload-path]/uploadInfo.yaml -n $namespace
+kubectl create secret generic -n $namespace runner-registration-token --from-literal=token="reg_FCCO87+S2M20oLpvwwkPZujTA1GJQgHcB+AMn250rtISNEe5sTbrJWsv5n39A3+FmuVF/tZwZxS6hpLMlGMEY+NNafyE9VrWUoeVE8Px26hZtrn4msZFJUG5GiK+DuEzHCyEgDJzlCrbFIwRcl1kukjSIfDJbFw2fXUZO6dUJLDWMJtIhc3ueigT6K+xjPjeAm09bHxOs7GxxHAMOsVX+E5pUq4agPcwMgecls6RitfjditeSCp/I/xuoCvXBvbmbbtMmm4GX5CKfm2QoVMpYj9dfgORJo0xa4r4XHNinRQw27cLtoDp1TmOE9LsT3Cr+c4CnrMeZ8sO4fE="
+kubectl create secret generic runner-registration-token --from-literal=token="reg_Vq60ZYWZpz45/jlBsy3NK9azDqIsIRwIX6MVTyjFhqX76leNcGZGih+MPdIiR9s6QAYjozNNbL9nmUaSHFML4tRr3M5iv4DxrdP+rJuCdViGw+xZ3t81w1B2Qmj6Xb34Jx1Mb8YDps4G1c4/P8jcqfX5p8q5DD6V2dC+PCI3Ay4VId8rjRGn0jVh2Psh3VXZuJx5qQJQfFSdMialS79TTe9XNqD963PZN8ewx0m0vt6dC/dxSqm/MNo4uZ9/CjqWAU6oX81SYUrqF/G3xDMm30H43ZRgjUXB/0Vnr2QiP/5r/8MS7W6J5IcgjMh6GR4F0D/CqAw=" -n $namespace
 
 
-helm install runwhen-local runwhen-contrib/runwhen-local  \
+kubectl create secret  -n $namespace generic uploadinfo --from-file=uploadInfo.yaml=[local-upload-path]/uploadInfo.yaml
+
+
+helm install -n $namespace runwhen-local runwhen-contrib/runwhen-local  \
     --set runwhenLocal.autoRun.uploadEnabled=true \
     --set runwhenLocal.uploadInfo.secretProvided.enabled=true \
     --set runwhenLocal.uploadInfo.secretProvided.secretName=uploadinfo \
     --set runwhenLocal.uploadInfo.secretProvided.secretKey=uploadInfo.yaml \
     --set runwhenLocal.uploadInfo.secretProvided.secretPath=uploadInfo.yaml \
-    --set workspaceName=rdebug-localstack \
+    --set workspaceName=k3d-localstack \
     --set runner.enabled=true \
     --set runner.controlAddr="https://runner.watcher.runwhen.com" \
     --set runner.metrics.url="https://runner-cortex-tenant.watcher.runwhen.com/push"
 
 helm upgrade runwhen-local runwhen-contrib/runwhen-local --set runner.controlAddr="https://runner.watcher.runwhen.com" --namespace rw-localstack
+
+
+
+~ ❯ helm install localstack -n localstack --create-namespace localstack/localstack                                                                                                16:34:22
+NAME: localstack
+LAST DEPLOYED: Fri Feb 28 16:34:45 2025
+NAMESPACE: localstack
+STATUS: deployed
+REVISION: 1
+NOTES:
+1. Get the application URL by running these commands:
+  export NODE_PORT=$(kubectl get --namespace "localstack" -o jsonpath="{.spec.ports[0].nodePort}" services localstack)
+  export NODE_IP=$(kubectl get nodes --namespace "localstack" -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NOD
+
+echo http://$NODE_IP:$NODE_PORT                                                                                                                                               16:34:45
+http://172.18.0.3:31566
+
+
+export namespace=rw-localstack
+kubectl create secret generic runner-registration-token --from-literal=token="reg_LnfvUYLDynDjni5dMgqYw3B476IjkHDyQlyPKCcs1QsPjnxcF+la8rwPZXd4M1ebE6jTRHCBPLoNQTPApX+oZntL3G9bMbpEEw3vpQ+aSlHxYt64K7WaNIwp9cUkPqyaCA7VM+JUGrcUFDPThN6LA3Y9EnbfmSuR2A+T+r7CYopFW6x8vopZx+pWYbzG+eHzbrBaKsoa/RZzhfj7L/VCxtsmeBc/ZYMFlT6DMW8GD4NraabOynooVLsmU2BgjEF6bG60KvZHx9ziajaCGR064awFVP+2LdE+ycFQEgQVo9T85lANe+ivtV43ACulbecMmzvnpjE=" -n $namespace

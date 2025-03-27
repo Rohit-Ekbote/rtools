@@ -1,9 +1,23 @@
 FROM alpine:latest
 
-ENV HOME=/root
+
+ENV RUNDEV_HOME=/home/rundev
+ENV PATH="$PATH:/usr/local/bin:/home/rundev/.local/bin"
+WORKDIR $RUNDEV_HOME
+
+# Add rundev user to sudoers with no password prompt
+RUN adduser -D -u 1000 rundev
+RUN echo "rundev ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+RUN chmod 1777 /tmp
+
+
+# Adjust permissions for rundev user
+#RUN chown rundev:0 -R $RUNDEV_HOME
+
 
 # Install Python and required dependencies
 RUN apk update && apk add --no-cache \
+    sudo \
     curl \
     git \
     vim \
@@ -18,14 +32,11 @@ RUN apk update && apk add --no-cache \
     musl-dev \
     bash \
     shadow \
-    tmux \
-    helm
-
+    helm \
+    xclip \
+    xsel \
+    k9s
     
-# Install Oh My Zsh non-interactively
-RUN curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh | zsh
-    
-SHELL ["/bin/zsh", "-c"]
 
 # Set Python3 as default and create virtual environment
 RUN python -m venv /opt/devenv && \
@@ -37,13 +48,10 @@ RUN wget -O /tmp/vault.zip https://releases.hashicorp.com/vault/1.15.2/vault_1.1
     unzip /tmp/vault.zip -d /usr/local/bin && \
     rm /tmp/vault.zip
 
-# Set the environment variables
-#ENV HOME=/root
 # Set additional environment variables
-ENV RSCRIPTS=/root/code/Rohit-Ekbote/rtools/devcontainer/rscripts
-ENV KUBECTL_PATH="$HOME/.config/kubectl"
-ENV KREW_ROOT="$HOME/.config/krew"
-ENV PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT}/bin:/root/google-cloud-sdk/bin/"
+ENV KUBECTL_PATH="$RUNDEV_HOME/.config/kubectl"
+ENV KREW_ROOT="$RUNDEV_HOME/.config/krew"
+ENV PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT}/bin:$RUNDEV_HOME/google-cloud-sdk/bin/"
 
 # Install kubectl
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
@@ -61,50 +69,28 @@ RUN cd "$(mktemp -d)" && \
     ./"${KREW}" install krew
 
 RUN echo 'export KREW_ROOT="$KREW_ROOT"' >> $ZDOTDIR/.zshrc && \
-    echo 'export PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT}/bin:/root/google-cloud-sdk/bin/"' >> $ZDOTDIR/.zshrc
+    echo 'export PATH="$PATH:$KUBECTL_PATH:${KREW_ROOT}/bin:$RUNDEV_HOME/google-cloud-sdk/bin/"' >> $ZDOTDIR/.zshrc
 # Install kubectl-ns plugin
 RUN kubectl krew install ns
 
 
 # Install gcloud SDK
-RUN curl -sSL https://sdk.cloud.google.com | zsh
+RUN curl -sSL https://sdk.cloud.google.com | bash -s -- --install-dir=/usr/local/gcloud --disable-prompts \
+    && echo "export PATH=/usr/local/gcloud/google-cloud-sdk/bin:\$PATH" >> /etc/profile
+
+# Ensure gcloud is available in PATH
+ENV PATH="/usr/local/gcloud/google-cloud-sdk/bin:${PATH}"
 
 # Install gke-gcloud-auth-plugin
 RUN gcloud components install gke-gcloud-auth-plugin --quiet
 
+
 # Install flux
-#RUN curl -s https://fluxcd.io/install.sh | zsh
 RUN curl -fsSL https://fluxcd.io/install.sh | bash -s -- /usr/local/bin
 
 # Install okteto
 RUN curl https://get.okteto.com -sSfL | sh # this line fails with zsh
 
-#RUN apk add git-extras
-RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-syntax-highlighting
-RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-autosuggestions.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-autosuggestions
-RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-completions.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-completions
-RUN source $ZDOTDIR/.zshrc && git clone https://github.com/zsh-users/zsh-history-substring-search.git ${ZSH_CUSTOM:-$ZSH/custom}/plugins/zsh-history-substring-search
-RUN source $ZDOTDIR/.zshrc && git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$ZSH/custom}/themes/powerlevel10k 
-ADD ./rscripts/p10k.zsh /root/.config/zsh/.p10k.zsh
-ADD ./rscripts/vimrc /root/.config/zsh/vimrc
-
-RUN source $ZDOTDIR/.zshrc && \
-    omz theme set powerlevel10k/powerlevel10k && \
-    #omz theme set agnoster && \
-    #omz plugin enable git && \
-    omz plugin enable git-extras && \
-    omz plugin enable zsh-syntax-highlighting && \
-    omz plugin enable zsh-autosuggestions && \
-    omz plugin enable zsh-completions && \
-    omz plugin enable zsh-history-substring-search && \
-    omz plugin enable common-aliases && \
-    omz plugin enable kubectl && \
-    omz plugin enable aws && \
-    omz plugin enable docker && \
-    omz plugin enable fluxcd && \
-    omz plugin enable gcloud
-
-
-# Add setup script to zshrc
-RUN echo "source $RSCRIPTS/setup_dev_terminal.sh" >> $ZDOTDIR/.zshrc
-RUN echo "Hello World"
+# Switch to rundev user
+USER rundev
+ADD ./rscripts/vimrc $RUNDEV_HOME/.config/zsh/vimrc
