@@ -1,20 +1,62 @@
-log_current_context() {
-    #echo "Current context: $(kubectl config current-context)"
-    #echo "Current namespace: $(kubectl config view --minify --output 'jsonpath={..namespace}')"
-    echo "$(kubectl config current-context) / $(kubectl config view --minify --output 'jsonpath={..namespace}')"
-}
-
-k_get_contexts() {
-    #kubectl config get-contexts -o=name
-    kubectl config get-contexts --no-headers | awk '{print ($1 == "*" ? "[ACTIVE] " $2 : $2)}'
-}
-
-k_use_context() {
-    kubectl config use-context $1
-}
-
 get_worksync_status() {
-	kubectl get worksync $1 -n flux-system -o custom-columns="READY:.status.conditions[?(@.type=='Ready')].status,REASON:.status.conditions[?(@.type=='Ready')].reason,LAST_APPLIED:.status.lastAppliedRevision,LAST_ATTEMPTED:.status.lastAttemptedRevision,INDEX_STATUS:.status.indexStatus.status,INDEX_FINISHED:.status.indexStatus.lastIndexFinishedAt,LastHandledReconcileAt:.status.lastHandledReconcileAt"
+  date
+  kubectl get worksync $1 -n flux-system -o json | jq '{
+    name: .metadata.name,
+    creationTimestamp: .metadata.creationTimestamp,
+    reconciliationAttempted: .status.lastHandledReconcileAt,
+    appliedRevision: .status.lastAppliedRevision,
+    indexCreatedAt: .status.indexStatus.createdAt,
+    indexModifiedAt: .status.indexStatus.modifiedAt,
+    indexRevision: .status.indexStatus.indexRevision,
+    indexStatus: .status.indexStatus.status,
+    lastIndexStartedAt: .status.indexStatus.lastIndexStartedAt,
+    lastIndexFinishedAt: .status.indexStatus.lastIndexFinishedAt,
+    readyStatus: (
+      ([.status.conditions[]? | select(.type == "Ready")] | first) as $ready |
+      if $ready then ($ready.status + " | " + $ready.reason + " | " + $ready.lastTransitionTime) else "N/A" end
+    ),
+    reconcilingStatus: (
+      ([.status.conditions[]? | select(.type == "Reconciling")] | first) as $reconciling |
+      if $reconciling then ($reconciling.status + " | " + $reconciling.reason + " | " + $reconciling.lastTransitionTime) else "N/A" end
+    ),
+  }'
+}
+
+get_gitrepo_status() {
+  date
+  kubectl get gitrepository $1 -n flux-system -o json | jq '{
+    name: .metadata.name,
+    creationTimestamp: .metadata.creationTimestamp,
+    reconciliationAttempted: .status.lastHandledReconcileAt,
+    appliedRevision: .status.artifact.revision,
+    artifactLastUpdateTime: .status.artifact.lastUpdateTime,
+    readyStatus: (
+      (.status.conditions[] | select(.type == "Ready")) as $ready |
+        ($ready.status + " | " + $ready.reason + " | " + $ready.lastTransitionTime)),
+    artifactInStorageStatus: (
+      (.status.conditions[] | select(.type == "ArtifactInStorage")) as $artifact |
+      ($artifact.status + " | " + $artifact.reason + " | " + $artifact.lastTransitionTime))
+  }'
+
+}
+
+print_latest_slxs(){
+    echo ---------`date`----------
+    get_gitrepo_status $1
+    get_worksync_status $1
+    kubectl get servicelevelx -A --sort-by=.metadata.creationTimestamp -o jsonpath="{range .items[*]}{.metadata.creationTimestamp} {' '}{.metadata.name}{'\n'}{end}" | grep $1 | tail -5
+}
+
+list_worksync_status(){
+	echo -------`date`-------
+	kubectl get worksync -A --sort-by=.metadata.name -o custom-columns=NAME:.metadata.name,lastHandledReconcileAt:.status.lastHandledReconcileAt,runbooks:.status.indexStatus.runbooksFound,indexStatus:.status.indexStatus.status,lastIndexStartedAt:.status.indexStatus.lastIndexStartedAt,lastIndexFinishedAt:.status.indexStatus.lastIndexFinishedAt,Type:.status.conditions[*].type,LastTransitionTime:.status.conditions[*].lastTransitionTime
+}
+
+connect_db(){
+	help_banner
+	password=`kubectl -n backend-services get secret core-pguser-core -o json | jq '.data.password'|base64 -d`
+	stsname=`kubectl get statefulsets -n backend-services --no-headers | awk '/^core/ {print $1; exit}'`
+	kubectl exec -n backend-services -it statefulset/${stsname} -c database -- bash -c "PGPASSWORD=\"${password}\" psql -hlocalhost -Ucore -d core"
 }
 
 echo "Welcome to the development environment"
@@ -26,6 +68,18 @@ help_banner() {
     #echo "Current namespace: $(kubectl config view --minify --output 'jsonpath={..namespace}')"
     #echo "Current context: $(kubectl config current-context)"
     echo "Following are some useful commands"
+    echo "---------------------------------------------------------------------------------"
+    echo "Command to list gcloud config"
+    echo "gcloud config list"
+    echo "sample working output"
+    cat <<EOF
+[core]
+account = rohit.ekbote@runwhen.com
+disable_usage_reporting = False
+project = runwhen-dev-tiger
+EOF
+
+Your active configuration is: [default]
     echo "---------------------------------------------------------------------------------"
     echo "Login to google cloud"
     echo "gcloud auth login"
@@ -60,15 +114,43 @@ help_banner() {
     echo "notes: You need to run this command from service code folder which has service specific okteto.yml file"
     echo "---------------------------------------------------------------------------------"
     echo "Get postgres password"
-    echo "kubectl -n backend-services get secrets core-pguser-core -o 'go-template={{range \$k,\$v := .data}}{{printf \"%s: \" \$k}}{{if not \$v}}{{\$v}}{{else}}{{\$v | base64decode}}{{end}}{{\"\\\\n\"}}{{end}}'"
+    echo "kubectl -n backend-services get secret core-pguser-core -o json | jq '.data.password'|base64 -d"
+    echo "---------------------------------------------------------------------------------"
+    echo "Get postgres credentials"
+    echo "kubectl -n backend-services get secrets core-pguser-core -o 'go-template={{range \$k,\$v := .data}}{{printf \"%s: \" \$k}}{{if not \$v}}{{\$v}}{{else}}{{\$v | base64decode}}{{end}}{{\"\\n\"}}{{end}}'"
     echo "notes: Command assumes that your current context is platform cluster"
     echo "---------------------------------------------------------------------------------"
     echo "Forward postgres port to local machine"
     echo "kubectl -n backend-services port-forward svc/core-pgadmin 5050 --address=0.0.0.0"
     echo "notes: After this open http://localhost:5000" to open pgbouncer, username: core@pgo and password: recived in "kubectl -n backend-services get secrets core-pguser-core ..." command
     echo "---------------------------------------------------------------------------------"
+    echo "Command to set reconciliation interval for all worksync instances as 60s"
+    echo 'for ws in $(kubectl get worksync -A -o jsonpath="{.items[*].metadata.name}"); do kubectl patch worksync $ws -n flux-system --type=merge -p '{"spec":{"interval":"60s"}}'; done'
+    echo "---------------------------------------------------------------------------------"
+    echo "Command to list count of points in qdrant collection"
+    cat <<EOF
+    for c in \$(curl -s -X GET http://\$QDRANT_SERVICE_HOST:6333/collections | jq '.result.collections[] | select(.name | startswith(\"rdebug\")) | .name'); do d=\${c//\"/}; echo \$d \$(curl -s -X GET http://\$QDRANT_SERVICE_HOST:6333/collections/\$d | jq '.result.points_count'); done
+EOF
+    echo "notes: QDRANT_SERVICE_HOST is env var available in sobow-index"
+    echo "---------------------------------------------------------------------------------"
+    echo "Command to get modified time of qdrant collection"
+    echo "kubectl exec -it qdrant-0 -c qdrant  -- stat --format '%n %y' /qdrant/storage/collections/rdebug-3k-02-blue--tasks"
+    echo "---------------------------------------------------------------------------------"
+    echo "Command to list index status of all worksyncs"
+    echo "kubectl get worksync -A -o custom-columns=NAME:.metadata.name,lastHandledReconcileAt:.status.lastHandledReconcileAt,indexStatus:.status.indexStatus.status,lastIndexStartedAt:.status.indexStatus.lastIndexStartedAt,lastIndexFinishedAt:.status.indexStatus.lastIndexFinishedAt"
+    echo "---------------------------------------------------------------------------------"
+    echo "Query to list shard_no, workspace_name and slx count"
+    echo "select coremodels_shard.shard_no, coremodels_workspace.name, count(1) from coremodels_slx inner join coremodels_workspace on coremodels_slx.workspace_id = coremodels_workspace.id inner join coremodels_shard on coremodels_shard.workspace_name = coremodels_workspace.name where coremodels_workspace.name like 'rdebug%' group by coremodels_shard.shard_no, coremodels_workspace.name order by coremodels_shard.shard_no, coremodels_workspace.name;"
+    echo "---------------------------------------------------------------------------------"
+    echo "Query to fetch count of runbooks having tasks populated"
+    echo "SELECT w.name, COUNT(*) FROM coremodels_runbook r JOIN coremodels_slx s ON r.slx_id = s.id JOIN coremodels_workspace w ON s.workspace_id = w.id WHERE w.name like 'rdebug%' and r.body->'status'->'codeBundle'->'tasks'->>0 IS NOT NULL group by w.name order by w.name;"
+    echo "---------------------------------------------------------------------------------"
+    echo "Command to cleanup orphan SLXs"
+    echo "kubectl -n backend-services exec deploy/papi -- python manage.py compare_slx --delete-orphaned-slx"
+    echo "---------------------------------------------------------------------------------"
 }
 
 help_banner
 
 cd $SRC_BASE_PATH
+

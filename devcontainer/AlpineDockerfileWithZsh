@@ -35,8 +35,10 @@ RUN apk update && apk add --no-cache \
     helm \
     xclip \
     xsel \
-    k9s
-    
+    k9s \
+    jq \
+    yq \
+    util-linux
 
 # Set Python3 as default and create virtual environment
 RUN python -m venv /opt/devenv && \
