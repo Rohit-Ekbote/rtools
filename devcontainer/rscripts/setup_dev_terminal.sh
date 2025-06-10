@@ -48,16 +48,85 @@ print_latest_slxs(){
 }
 
 list_worksync_status(){
+    ctx=$1
+    help_banner
+
+    if [ -n "$ctx" ]; then
+        kubectl_cmd="kubectl --context=$ctx"
+    else
+        kubectl_cmd="kubectl"
+    fi
 	echo -------`date`-------
-	kubectl get worksync -A --sort-by=.metadata.name -o custom-columns=NAME:.metadata.name,lastHandledReconcileAt:.status.lastHandledReconcileAt,runbooks:.status.indexStatus.runbooksFound,indexStatus:.status.indexStatus.status,lastIndexStartedAt:.status.indexStatus.lastIndexStartedAt,lastIndexFinishedAt:.status.indexStatus.lastIndexFinishedAt,Type:.status.conditions[*].type,LastTransitionTime:.status.conditions[*].lastTransitionTime
+	${kubectl_cmd} get worksync -A --sort-by=.metadata.name -o custom-columns=NAME:.metadata.name,lastHandledReconcileAt:.status.lastHandledReconcileAt,runbooks:.status.indexStatus.runbooksFound,indexStatus:.status.indexStatus.status,lastIndexStartedAt:.status.indexStatus.lastIndexStartedAt,lastIndexFinishedAt:.status.indexStatus.lastIndexFinishedAt,Type:.status.conditions[*].type,LastTransitionTime:.status.conditions[*].lastTransitionTime
 }
 
 connect_db(){
 	help_banner
 	password=`kubectl -n backend-services get secret core-pguser-core -o json | jq '.data.password'|base64 -d`
 	stsname=`kubectl get statefulsets -n backend-services --no-headers | awk '/^core/ {print $1; exit}'`
-	kubectl exec -n backend-services -it statefulset/${stsname} -c database -- bash -c "PGPASSWORD=\"${password}\" psql -hlocalhost -Ucore -d core"
+	#kubectl exec -n backend-services -it statefulset/${stsname} -c database -- bash -c "PGPASSWORD=\"${password}\" psql -hlocalhost -Ucore -d core"
+	kubectl exec -n backend-services -it statefulset/${stsname} -c database -- bash -c "PS1='[\u@\h \W \A]\$ ' PGPASSWORD=\"${password}\" psql -hlocalhost -Ucore -d core"
 }
+
+connect_db_ex() {
+    ctx=$1
+    help_banner
+
+    if [ -n "$ctx" ]; then
+        kubectl_cmd="kubectl --context=$ctx"
+    else
+        kubectl_cmd="kubectl"
+    fi
+
+    password=$($kubectl_cmd -n backend-services get secret core-pguser-core -o json | jq -r '.data.password' | base64 -d)
+    stsname=$($kubectl_cmd get statefulsets -n backend-services --no-headers | awk '/^core/ {print $1; exit}')
+
+    $kubectl_cmd exec -n backend-services -it statefulset/${stsname} -c database -- bash -c "PS1='[\u@\h \W \A]\$ ' PGPASSWORD=\"${password}\" psql -hlocalhost -Ucore -d core"
+}
+
+sli_cctag() {
+  local context=""
+  local workspace=""
+
+  # Argument parsing
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --context)
+        context="$2"
+        shift 2
+        ;;
+      -w|--workspace)
+        workspace="$2"
+        shift 2
+        ;;
+      -*)
+        echo "Unknown option: $1"
+        usage
+        return 1
+        ;;
+      *)
+        echo "Unexpected argument: $1"
+        usage
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$workspace" ]]; then
+    echo "Error: -w|--workspace is required."
+    usage
+    return 1
+  fi
+
+  if [ -n "$context" ]; then
+      kubectl_cmd="kubectl --context=$context"
+  else
+      kubectl_cmd="kubectl"
+  fi
+
+  $kubectl_cmd get servicelevelindicator -n default -l 'workspace=${workspace}' -o json | jq -c '.items[]|{"img":.status.image, "tag":.status.imageTag}' |sort | uniq -c
+}
+
 
 echo "Welcome to the development environment"
 echo "Any time use help_banner to see useful commands"
@@ -148,9 +217,24 @@ EOF
     echo "Command to cleanup orphan SLXs"
     echo "kubectl -n backend-services exec deploy/papi -- python manage.py compare_slx --delete-orphaned-slx"
     echo "---------------------------------------------------------------------------------"
+    echo "Command to list bucket files"
+    echo "gcloud storage ls -l gs://runwhen-dev-tiger-shared-workspace/rdebug-small-07/--/**/stdout.txt"
+    echo "---------------------------------------------------------------------------------"
 }
 
 help_banner
 
 cd $SRC_BASE_PATH
 
+export pandal=gke_runwhen-dev-panda_asia-south1_location-asia-south1-01
+export pandap=gke_runwhen-dev-panda_asia-south1_platform-cluster
+export tigerl=gke_runwhen-dev-tiger_northamerica-northeast2_location-northamerica-northeast2-01
+export tigerp=gke_runwhen-dev-tiger_us-central1_platform-cluster
+export tigerc=gke_runwhen-dev-tiger_us-central1_tiger-controlplane-cluster
+export betap=gke_runwhen-nonprod-beta_us-west1_platform-cluster-01
+export jpyel=gke_runwhen-nonprod-jpye_northamerica-northeast2_northamerica-northeast2-01
+export jpyep=gke_runwhen-nonprod-jpye_us-central1_platform-cluster
+export sandboxl=gke_runwhen-nonprod-sandbox_us-central1_sandbox-cluster-1-cluster
+export testl=gke_runwhen-nonprod-test_northamerica-northeast1_location-01
+export testp=gke_runwhen-nonprod-test_northamerica-northeast1_platform-cluster-01
+export watcherp=gke_runwhen-nonprod-watcher_us-central1_platform-cluster

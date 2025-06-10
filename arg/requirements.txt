@@ -1,0 +1,2 @@
+# No Python package dependencies since we use the Azure CLI
+# Install the Azure CLI separately: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli 
