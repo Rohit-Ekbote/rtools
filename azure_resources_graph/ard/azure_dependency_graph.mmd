@@ -1,0 +1,95 @@
+flowchart LR
+
+    webhook[(webhook<br/>(workflows))]
+    runwhen-webhooks[runwhen-webhooks<br/>(ActionGroups)]
+    sb-demo-primary{sb-demo-primary<br/>(Namespaces)}
+    law-sb-health-demo[law-sb-health-demo<br/>(workspaces)]
+    sb-deadletter-alert[sb-deadletter-alert<br/>(metricAlerts)]
+    runwhensandboxacr[runwhensandboxacr<br/>(registries)]
+    runwhensbxactionstf[(runwhensbxactionstf<br/>(storageAccounts))]
+    NetworkWatcher_eastus[NetworkWatcher_eastus<br/>(networkWatchers)]
+    NetworkWatcher_canadacentral[NetworkWatcher_canadacentral<br/>(networkWatchers)]
+    sandboxcontosostorage01[(sandboxcontosostorage01<br/>(storageAccounts))]
+    contoso-cosmos[contoso-cosmos<br/>(databaseAccounts)]
+    contoso-swa[contoso-swa<br/>(staticSites)]
+    stojcjiczjudu42[(stojcjiczjudu42<br/>(storageAccounts))]
+    kv-ojcjiczjudu42[kv-ojcjiczjudu42<br/>(vaults)]
+    psql-db-ojcjiczjudu42{psql-db-ojcjiczjudu42<br/>(flexibleServers)}
+    evgt-ojcjiczjudu42(evgt-ojcjiczjudu42<br/>(systemTopics))
+    cosmos-ojcjiczjudu42[cosmos-ojcjiczjudu42<br/>(databaseAccounts)]
+    log-ojcjiczjudu42[log-ojcjiczjudu42<br/>(workspaces)]
+    appi-ojcjiczjudu42[appi-ojcjiczjudu42<br/>(components)]
+    dash-ojcjiczjudu42[dash-ojcjiczjudu42<br/>(dashboards)]
+    Application_Insights_Smart_Detection[Application Insights Smart Detection<br/>(ActionGroups)]
+    crojcjiczjudu42[crojcjiczjudu42<br/>(registries)]
+    stapp-web-ojcjiczjudu42[stapp-web-ojcjiczjudu42<br/>(staticSites)]
+    apim-ojcjiczjudu42[apim-ojcjiczjudu42<br/>(service)]
+    plan-ojcjiczjudu42(plan-ojcjiczjudu42<br/>(serverfarms)))
+    app-web-ojcjiczjudu42[app-web-ojcjiczjudu42<br/>(WebPubSub)]
+    app-ojcjiczjudu42-cms(app-ojcjiczjudu42-cms<br/>(sites))
+    app-ojcjiczjudu42-stripe(app-ojcjiczjudu42-stripe<br/>(sites))
+    app-ojcjiczjudu42-blog(app-ojcjiczjudu42-blog<br/>(sites))
+    func-api-ojcjiczjudu42(func-api-ojcjiczjudu42<br/>(sites))
+    cae-ojcjiczjudu42{cae-ojcjiczjudu42<br/>(managedEnvironments)}
+    app-api-ojcjiczjudu42((app-api-ojcjiczjudu42<br/>(containerApps)))
+    app-autoscale[app-autoscale<br/>(autoscaleSettings)]
+
+    sb-demo-primary --> sb-demo-primary
+    sb-deadletter-alert --> sb-demo-primary
+    runwhensbxactionstf --> runwhensbxactionstf
+    sandboxcontosostorage01 --> sandboxcontosostorage01
+    stojcjiczjudu42 --> stojcjiczjudu42
+    kv-ojcjiczjudu42 --> kv-ojcjiczjudu42
+    app-ojcjiczjudu42-cms --> kv-ojcjiczjudu42
+    app-ojcjiczjudu42-stripe --> kv-ojcjiczjudu42
+    app-ojcjiczjudu42-blog --> kv-ojcjiczjudu42
+    func-api-ojcjiczjudu42 --> kv-ojcjiczjudu42
+    app-api-ojcjiczjudu42 --> crojcjiczjudu42
+    app-api-ojcjiczjudu42 --> cae-ojcjiczjudu42
+    app-autoscale --> plan-ojcjiczjudu42
+
+    %% Styling
+    classDef class51 fill:#00D2D3,stroke:#333,stroke-width:2px;
+    class webhook class51;
+    classDef class53 fill:#FF9F43,stroke:#333,stroke-width:2px;
+    class runwhen-webhooks,Application_Insights_Smart_Detection class53;
+    classDef class55 fill:#A29BFE,stroke:#333,stroke-width:2px;
+    class sb-demo-primary class55;
+    classDef class57 fill:#FD79A8,stroke:#333,stroke-width:2px;
+    class law-sb-health-demo,log-ojcjiczjudu42 class57;
+    classDef class59 fill:#EE5A24,stroke:#333,stroke-width:2px;
+    class sb-deadletter-alert class59;
+    classDef class61 fill:#FF9FF3,stroke:#333,stroke-width:2px;
+    class runwhensandboxacr,crojcjiczjudu42 class61;
+    classDef class63 fill:#FF6B6B,stroke:#333,stroke-width:2px;
+    class runwhensbxactionstf,sandboxcontosostorage01,stojcjiczjudu42 class63;
+    classDef class65 fill:#DDD,stroke:#333,stroke-width:2px;
+    class NetworkWatcher_eastus,NetworkWatcher_canadacentral class65;
+    classDef class67 fill:#DDD,stroke:#333,stroke-width:2px;
+    class contoso-cosmos,cosmos-ojcjiczjudu42 class67;
+    classDef class69 fill:#DDD,stroke:#333,stroke-width:2px;
+    class contoso-swa,stapp-web-ojcjiczjudu42 class69;
+    classDef class71 fill:#4ECDC4,stroke:#333,stroke-width:2px;
+    class kv-ojcjiczjudu42 class71;
+    classDef class73 fill:#45B7D1,stroke:#333,stroke-width:2px;
+    class psql-db-ojcjiczjudu42 class73;
+    classDef class75 fill:#FDCB6E,stroke:#333,stroke-width:2px;
+    class evgt-ojcjiczjudu42 class75;
+    classDef class77 fill:#DDD,stroke:#333,stroke-width:2px;
+    class appi-ojcjiczjudu42 class77;
+    classDef class79 fill:#DDD,stroke:#333,stroke-width:2px;
+    class dash-ojcjiczjudu42 class79;
+    classDef class81 fill:#DDD,stroke:#333,stroke-width:2px;
+    class apim-ojcjiczjudu42 class81;
+    classDef class83 fill:#FECA57,stroke:#333,stroke-width:2px;
+    class plan-ojcjiczjudu42 class83;
+    classDef class85 fill:#DDD,stroke:#333,stroke-width:2px;
+    class app-web-ojcjiczjudu42 class85;
+    classDef class87 fill:#96CEB4,stroke:#333,stroke-width:2px;
+    class app-ojcjiczjudu42-cms,app-ojcjiczjudu42-stripe,app-ojcjiczjudu42-blog,func-api-ojcjiczjudu42 class87;
+    classDef class89 fill:#54A0FF,stroke:#333,stroke-width:2px;
+    class cae-ojcjiczjudu42 class89;
+    classDef class91 fill:#5F27CD,stroke:#333,stroke-width:2px;
+    class app-api-ojcjiczjudu42 class91;
+    classDef class93 fill:#0984E3,stroke:#333,stroke-width:2px;
+    class app-autoscale class93;

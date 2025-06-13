@@ -1,0 +1,2 @@
+# No external dependencies required for Mermaid chart generation
+# All dependencies are part of Python standard library 

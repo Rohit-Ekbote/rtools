@@ -1,0 +1,478 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Resource Graph - Interactive</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #f0f0f0;
+        }
+        
+        #graph-container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        
+        .links line {
+            stroke-opacity: 0.6;
+            stroke-width: 1px;
+        }
+        
+        .nodes circle {
+            stroke: #fff;
+            stroke-width: 1.5px;
+        }
+        
+        .node-label {
+            font-size: 12px;
+            pointer-events: none;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        
+        .tooltip {
+            position: absolute;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            pointer-events: none;
+            opacity: 0;
+            z-index: 100;
+        }
+        
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .controls button {
+            padding: 5px 10px;
+            cursor: pointer;
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+        }
+        
+        .controls button:hover {
+            background-color: #e8e8e8;
+        }
+        
+        .controls button.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        .legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            z-index: 50;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .legend-color {
+            width: 15px;
+            height: 15px;
+            margin-right: 5px;
+            border-radius: 50%;
+        }
+        
+        .selected {
+            stroke: #000;
+            stroke-width: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="graph-container">
+        <div class="controls">
+            <button id="zoom-in" title="Zoom In">+</button>
+            <button id="zoom-out" title="Zoom Out">-</button>
+            <button id="reset" title="Reset View">Reset</button>
+            <button id="toggle-labels" title="Show/Hide Labels">Toggle Labels</button>
+            <button id="toggle-potential" title="Show/Hide Potential Dependencies" class="active">Hide Potential Dependencies</button>
+        </div>
+        <div class="legend">
+            <h3>Legend</h3>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #1f77b4;"></div>
+                <span>Subscription</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #ff7f0e;"></div>
+                <span>Resource Group</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #2ca02c;"></div>
+                <span>Resource</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: transparent; border: 2px solid #aaa;"></div>
+                <span>Contains Relationship</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: transparent; border: 2px solid #ff0000;"></div>
+                <span>Confirmed Dependency</span>
+            </div>
+            <div class="legend-item potential-dependency">
+                <div class="legend-color" style="background-color: transparent; border: 2px dashed #ff7f0e;"></div>
+                <span>Potential Dependency</span>
+            </div>
+        </div>
+        <div class="tooltip"></div>
+    </div>
+    
+    <script>
+        // Data
+        const graphData = {
+            nodes: [{"id": "subscription_id", "name": "Subscription 2a0cf760-b...", "type": "subscription", "group": 0, "level": 0}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-ado-triage", "name": "azure-ado-triage", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-apim-health", "name": "azure-apim-health", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-rg-triage", "name": "azure-rg-triage", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-servicebus-health", "name": "azure-servicebus-health", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/NetworkWatcherRG", "name": "NetworkWatcherRG", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app", "name": "rg-contoso-01-app", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-data", "name": "rg-contoso-01-data", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-monitoring", "name": "rg-contoso-01-monitoring", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-network", "name": "rg-contoso-01-network", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/runwhen-base-org", "name": "runwhen-base-org", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/sandbox", "name": "sandbox", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/sandbox-contoso-rg", "name": "sandbox-contoso-rg", "type": "resourceGroup", "group": 1, "level": 1}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-apim-health/providers/microsoft.insights/actiongroups/runwhen-webhooks", "name": "runwhen-webhooks", "display_name": "Action Group", "type": "microsoft.insights/actiongroups", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-apim-health/providers/Microsoft.Logic/workflows/webhook", "name": "webhook", "display_name": "Logic App", "type": "microsoft.logic/workflows", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-servicebus-health/providers/Microsoft.Insights/metricalerts/sb-deadletter-alert", "name": "sb-deadletter-alert", "display_name": "Metric Alert", "type": "microsoft.insights/metricalerts", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-servicebus-health/providers/Microsoft.OperationalInsights/workspaces/law-sb-health-demo", "name": "law-sb-health-demo", "display_name": "Log Analytics", "type": "microsoft.operationalinsights/workspaces", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/azure-servicebus-health/providers/Microsoft.ServiceBus/namespaces/sb-demo-primary", "name": "sb-demo-primary", "display_name": "Service Bus", "type": "microsoft.servicebus/namespaces", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.App/containerApps/app-api-ojcjiczjudu42", "name": "app-api-ojcjiczjudu42", "display_name": "Container App", "type": "microsoft.app/containerapps", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.App/managedEnvironments/cae-ojcjiczjudu42", "name": "cae-ojcjiczjudu42", "display_name": "Container App Environment", "type": "microsoft.app/managedenvironments", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.Insights/autoscalesettings/app-autoscale", "name": "app-autoscale", "display_name": "Autoscalesettings", "type": "microsoft.insights/autoscalesettings", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.SignalRService/WebPubSub/app-web-ojcjiczjudu42", "name": "app-web-ojcjiczjudu42", "display_name": "Web PubSub", "type": "microsoft.signalrservice/webpubsub", "kind": "WebPubSub", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.Web/serverFarms/plan-ojcjiczjudu42", "name": "plan-ojcjiczjudu42", "display_name": "App Service Plan", "type": "microsoft.web/serverfarms", "kind": "linux", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.Web/sites/app-ojcjiczjudu42-blog", "name": "app-ojcjiczjudu42-blog", "display_name": "Linux Web App", "type": "microsoft.web/sites", "kind": "app,linux", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.Web/sites/app-ojcjiczjudu42-cms", "name": "app-ojcjiczjudu42-cms", "display_name": "Linux Web App", "type": "microsoft.web/sites", "kind": "app,linux", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.Web/sites/app-ojcjiczjudu42-stripe", "name": "app-ojcjiczjudu42-stripe", "display_name": "Linux Web App", "type": "microsoft.web/sites", "kind": "app,linux", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-app/providers/Microsoft.Web/sites/func-api-ojcjiczjudu42", "name": "func-api-ojcjiczjudu42", "display_name": "Function App", "type": "microsoft.web/sites", "kind": "functionapp,linux", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-db-ojcjiczjudu42", "name": "psql-db-ojcjiczjudu42", "display_name": "PostgreSQL", "type": "microsoft.dbforpostgresql/flexibleservers", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-data/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-ojcjiczjudu42", "name": "cosmos-ojcjiczjudu42", "display_name": "Cosmos DB (MongoDB)", "type": "microsoft.documentdb/databaseaccounts", "kind": "MongoDB", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-data/providers/Microsoft.EventGrid/systemTopics/evgt-ojcjiczjudu42", "name": "evgt-ojcjiczjudu42", "display_name": "Event Grid", "type": "microsoft.eventgrid/systemtopics", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-data/providers/Microsoft.KeyVault/vaults/kv-ojcjiczjudu42", "name": "kv-ojcjiczjudu42", "display_name": "Key Vault", "type": "microsoft.keyvault/vaults", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-data/providers/Microsoft.Storage/storageAccounts/stojcjiczjudu42", "name": "stojcjiczjudu42", "display_name": "Storage Account v2", "type": "microsoft.storage/storageaccounts", "kind": "StorageV2", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-monitoring/providers/microsoft.insights/actiongroups/Application Insights Smart Detection", "name": "Application Insights Smart Detection", "display_name": "Action Group", "type": "microsoft.insights/actiongroups", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-monitoring/providers/Microsoft.Insights/components/appi-ojcjiczjudu42", "name": "appi-ojcjiczjudu42", "display_name": "App Insights", "type": "microsoft.insights/components", "kind": "web", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-monitoring/providers/Microsoft.OperationalInsights/workspaces/log-ojcjiczjudu42", "name": "log-ojcjiczjudu42", "display_name": "Log Analytics", "type": "microsoft.operationalinsights/workspaces", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-monitoring/providers/Microsoft.Portal/dashboards/dash-ojcjiczjudu42", "name": "dash-ojcjiczjudu42", "display_name": "Dashboard", "type": "microsoft.portal/dashboards", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-network/providers/Microsoft.ApiManagement/service/apim-ojcjiczjudu42", "name": "apim-ojcjiczjudu42", "display_name": "API Management", "type": "microsoft.apimanagement/service", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-network/providers/Microsoft.ContainerRegistry/registries/crojcjiczjudu42", "name": "crojcjiczjudu42", "display_name": "Container Registry", "type": "microsoft.containerregistry/registries", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/rg-contoso-01-network/providers/Microsoft.Web/staticSites/stapp-web-ojcjiczjudu42", "name": "stapp-web-ojcjiczjudu42", "display_name": "Static Site", "type": "microsoft.web/staticsites", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/sandbox-contoso-rg/providers/Microsoft.DocumentDB/databaseAccounts/contoso-cosmos", "name": "contoso-cosmos", "display_name": "Cosmos DB", "type": "microsoft.documentdb/databaseaccounts", "kind": "GlobalDocumentDB", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/sandbox-contoso-rg/providers/Microsoft.Storage/storageAccounts/sandboxcontosostorage01", "name": "sandboxcontosostorage01", "display_name": "Storage Account v2", "type": "microsoft.storage/storageaccounts", "kind": "StorageV2", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/sandbox-contoso-rg/providers/Microsoft.Web/staticSites/contoso-swa", "name": "contoso-swa", "display_name": "Static Site", "type": "microsoft.web/staticsites", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/sandbox/providers/Microsoft.ContainerRegistry/registries/runwhensandboxacr", "name": "runwhensandboxacr", "display_name": "Container Registry", "type": "microsoft.containerregistry/registries", "kind": "", "group": 2, "level": 2}, {"id": "/subscriptions/subscription_id/resourceGroups/sandbox/providers/Microsoft.Storage/storageAccounts/runwhensbxactionstf", "name": "runwhensbxactionstf", "display_name": "Storage Account v2", "type": "microsoft.storage/storageaccounts", "kind": "StorageV2", "group": 2, "level": 2}],
+            links: [{"source": 0, "target": 1, "value": 1, "type": "contains"}, {"source": 0, "target": 2, "value": 1, "type": "contains"}, {"source": 0, "target": 3, "value": 1, "type": "contains"}, {"source": 0, "target": 4, "value": 1, "type": "contains"}, {"source": 0, "target": 5, "value": 1, "type": "contains"}, {"source": 0, "target": 6, "value": 1, "type": "contains"}, {"source": 0, "target": 7, "value": 1, "type": "contains"}, {"source": 0, "target": 8, "value": 1, "type": "contains"}, {"source": 0, "target": 9, "value": 1, "type": "contains"}, {"source": 0, "target": 10, "value": 1, "type": "contains"}, {"source": 0, "target": 11, "value": 1, "type": "contains"}, {"source": 0, "target": 12, "value": 1, "type": "contains"}, {"source": 2, "target": 13, "value": 1, "type": "contains"}, {"source": 2, "target": 14, "value": 1, "type": "contains"}, {"source": 4, "target": 15, "value": 1, "type": "contains"}, {"source": 4, "target": 16, "value": 1, "type": "contains"}, {"source": 4, "target": 17, "value": 1, "type": "contains"}, {"source": 6, "target": 18, "value": 1, "type": "contains"}, {"source": 6, "target": 19, "value": 1, "type": "contains"}, {"source": 6, "target": 20, "value": 1, "type": "contains"}, {"source": 6, "target": 21, "value": 1, "type": "contains"}, {"source": 6, "target": 22, "value": 1, "type": "contains"}, {"source": 6, "target": 23, "value": 1, "type": "contains"}, {"source": 6, "target": 24, "value": 1, "type": "contains"}, {"source": 6, "target": 25, "value": 1, "type": "contains"}, {"source": 6, "target": 26, "value": 1, "type": "contains"}, {"source": 7, "target": 27, "value": 1, "type": "contains"}, {"source": 7, "target": 28, "value": 1, "type": "contains"}, {"source": 7, "target": 29, "value": 1, "type": "contains"}, {"source": 7, "target": 30, "value": 1, "type": "contains"}, {"source": 7, "target": 31, "value": 1, "type": "contains"}, {"source": 8, "target": 32, "value": 1, "type": "contains"}, {"source": 8, "target": 33, "value": 1, "type": "contains"}, {"source": 8, "target": 34, "value": 1, "type": "contains"}, {"source": 8, "target": 35, "value": 1, "type": "contains"}, {"source": 9, "target": 36, "value": 1, "type": "contains"}, {"source": 9, "target": 37, "value": 1, "type": "contains"}, {"source": 9, "target": 38, "value": 1, "type": "contains"}, {"source": 12, "target": 39, "value": 1, "type": "contains"}, {"source": 12, "target": 40, "value": 1, "type": "contains"}, {"source": 12, "target": 41, "value": 1, "type": "contains"}, {"source": 11, "target": 42, "value": 1, "type": "contains"}, {"source": 11, "target": 43, "value": 1, "type": "contains"}, {"source": 15, "target": 17, "value": 2, "type": "depends"}, {"source": 18, "target": 19, "value": 2, "type": "depends"}, {"source": 29, "target": 31, "value": 2, "type": "depends"}, {"source": 33, "target": 34, "value": 2, "type": "depends"}, {"source": 35, "target": 33, "value": 2, "type": "depends"}, {"source": 19, "target": 33, "value": 2, "type": "potential"}, {"source": 23, "target": 23, "value": 2, "type": "potential"}, {"source": 23, "target": 30, "value": 2, "type": "potential"}, {"source": 24, "target": 24, "value": 2, "type": "potential"}, {"source": 24, "target": 30, "value": 2, "type": "potential"}, {"source": 25, "target": 30, "value": 2, "type": "potential"}, {"source": 25, "target": 25, "value": 2, "type": "potential"}, {"source": 26, "target": 28, "value": 2, "type": "potential"}, {"source": 26, "target": 26, "value": 2, "type": "potential"}, {"source": 26, "target": 25, "value": 2, "type": "potential"}, {"source": 26, "target": 31, "value": 2, "type": "potential"}, {"source": 26, "target": 30, "value": 2, "type": "potential"}, {"source": 26, "target": 27, "value": 2, "type": "potential"}, {"source": 35, "target": 33, "value": 2, "type": "potential"}, {"source": 36, "target": 33, "value": 2, "type": "potential"}]
+        };
+        
+        // Create SVG
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        
+        const svg = d3.select("#graph-container")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height);
+        
+        // Create zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 10])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            });
+        
+        svg.call(zoom);
+        
+        const g = svg.append("g");
+        
+        // Create tooltip
+        const tooltip = d3.select(".tooltip");
+        
+        // Create simulation
+        const simulation = d3.forceSimulation(graphData.nodes)
+            .force("link", d3.forceLink(graphData.links).distance(100))
+            .force("charge", d3.forceManyBody().strength(-400))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("x", d3.forceX(width / 2).strength(0.1))
+            .force("y", d3.forceY(height / 2).strength(0.1));
+        
+        // Define node colors
+        const colorScale = d3.scaleOrdinal()
+            .domain([0, 1, 2])
+            .range(["#1f77b4", "#ff7f0e", "#2ca02c"]);
+        
+        // Create links
+        const link = g.append("g")
+            .attr("class", "links")
+            .selectAll("line")
+            .data(graphData.links)
+            .enter().append("line")
+            .attr("stroke", d => {
+                if (d.type === "depends") return "#ff0000";
+                if (d.type === "potential") return "#ff7f0e";
+                return "#aaa";
+            })
+            .attr("stroke-dasharray", d => d.type === "potential" ? "5,5" : "0")
+            .attr("class", d => {
+                const sourceId = typeof d.source === 'object' ? d.source.id : graphData.nodes[d.source].id;
+                const targetId = typeof d.target === 'object' ? d.target.id : graphData.nodes[d.target].id;
+                const linkType = d.type;
+                return `link ${sourceId.replace(/[^a-zA-Z0-9]/g, '_')} ${targetId.replace(/[^a-zA-Z0-9]/g, '_')} link-type-${linkType}`;
+            });
+        
+        // Create nodes
+        const node = g.append("g")
+            .attr("class", "nodes")
+            .selectAll("g")
+            .data(graphData.nodes)
+            .enter().append("g")
+            .attr("class", d => `node ${d.id.replace(/[^a-zA-Z0-9]/g, '_')}`)
+            .call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+        
+        // Add circles to nodes
+        node.append("circle")
+            .attr("r", d => d.group === 0 ? 15 : d.group === 1 ? 10 : 7)
+            .attr("fill", d => colorScale(d.group))
+            .on("mouseover", handleMouseOver)
+            .on("mouseout", handleMouseOut)
+            .on("click", handleClick);
+        
+        // Add labels to nodes
+        const labels = node.append("text")
+            .attr("class", "node-label")
+            .attr("dx", 12)
+            .attr("dy", ".35em")
+            .text(d => {
+                if (d.type === "subscription") return "Subscription";
+                if (d.type === "resourceGroup") return d.name;
+                return d.display_name ? `${d.display_name}: ${d.name}` : d.name;
+            })
+            .style("display", "none");  // Hide labels initially
+        
+        // Track selected node
+        let selectedNode = null;
+        
+        // Track whether potential dependencies are visible
+        let potentialDepsVisible = true;
+        
+        // Handle node hover - only show tooltip, no highlighting
+        function handleMouseOver(event, d) {
+            // Only show tooltip
+            tooltip.style("opacity", 1)
+                .html(() => {
+                    if (d.type === "subscription") {
+                        return `<strong>Subscription</strong><br>${d.name}`;
+                    } else if (d.type === "resourceGroup") {
+                        return `<strong>Resource Group</strong><br>${d.name}`;
+                    } else {
+                        let html = `<strong>${d.display_name || d.type.split('/').pop()}</strong><br>`;
+                        html += `Name: ${d.name}<br>`;
+                        html += `Type: ${d.type}<br>`;
+                        if (d.kind) html += `Kind: ${d.kind}<br>`;
+                        return html;
+                    }
+                })
+                .style("left", (event.pageX + 10) + "px")
+                .style("top", (event.pageY - 10) + "px");
+        }
+        
+        // Handle mouse out - just hide tooltip
+        function handleMouseOut() {
+            tooltip.style("opacity", 0);
+        }
+        
+        // Handle node click
+        function handleClick(event, d) {
+            // Clear previous selection
+            if (selectedNode) {
+                d3.selectAll(".node circle").classed("selected", false);
+                resetHighlighting();
+                
+                // Hide all labels if they're not toggled on
+                if (!labelsVisible) {
+                    labels.style("display", "none");
+                }
+            }
+            
+            if (selectedNode === d) {
+                // Clicking the same node again deselects it
+                selectedNode = null;
+            } else {
+                // Select new node
+                selectedNode = d;
+                d3.select(event.currentTarget).classed("selected", true);
+                highlightConnections(d);
+                
+                // Show labels for the clicked node and all connected nodes
+                const nodeId = d.id.replace(/[^a-zA-Z0-9]/g, '_');
+                d3.select(`.node.${nodeId} .node-label`).style("display", "block");
+                
+                // For each connected link, also show label for the node at the other end
+                d3.selectAll(`.link.${nodeId}`).each(function() {
+                    const linkData = d3.select(this).datum();
+                    let connectedId;
+                    
+                    if (typeof linkData.source === 'object' && typeof linkData.target === 'object') {
+                        connectedId = (linkData.source.id === d.id ? linkData.target.id : linkData.source.id);
+                    } else {
+                        const sourceNode = graphData.nodes[linkData.source];
+                        const targetNode = graphData.nodes[linkData.target];
+                        connectedId = (sourceNode.id === d.id ? targetNode.id : sourceNode.id);
+                    }
+                    
+                    d3.select(`.node.${connectedId.replace(/[^a-zA-Z0-9]/g, '_')} .node-label`).style("display", "block");
+                });
+            }
+            
+            // Prevent event from propagating to SVG
+            event.stopPropagation();
+        }
+        
+        // Click on the background to deselect
+        svg.on("click", () => {
+            if (selectedNode) {
+                d3.selectAll(".node circle").classed("selected", false);
+                resetHighlighting();
+                selectedNode = null;
+                
+                // Hide all labels if they're not toggled on
+                if (!labelsVisible) {
+                    labels.style("display", "none");
+                }
+            }
+        });
+        
+        function highlightConnections(d) {
+            const nodeId = d.id.replace(/[^a-zA-Z0-9]/g, '_');
+            
+            // Fade all nodes and links
+            d3.selectAll(".link").style("opacity", 0.1);
+            d3.selectAll(".node circle").style("opacity", 0.1);
+            
+            // Highlight current node
+            d3.select(`.node.${nodeId} circle`).style("opacity", 1);
+            
+            // Highlight connected links and nodes
+            const connectedLinks = d3.selectAll(`.link.${nodeId}`);
+            
+            // Create a set to track all connected nodes
+            const connectedNodeIds = new Set();
+            
+            // Filter links based on potential dependency visibility
+            connectedLinks.each(function() {
+                const linkElement = d3.select(this);
+                
+                // Skip potential dependencies if they're hidden
+                if (!potentialDepsVisible && linkElement.classed("link-type-potential")) {
+                    return;
+                }
+                
+                linkElement.style("opacity", 1).style("stroke-width", 2);
+                
+                // Extract and highlight connected node
+                const linkData = linkElement.datum();
+                let targetId;
+                
+                if (typeof linkData.source === 'object' && typeof linkData.target === 'object') {
+                    targetId = (linkData.source.id === d.id ? linkData.target.id : linkData.source.id);
+                } else {
+                    const sourceNode = graphData.nodes[linkData.source];
+                    const targetNode = graphData.nodes[linkData.target];
+                    targetId = (sourceNode.id === d.id ? targetNode.id : sourceNode.id);
+                }
+                
+                // Add to our set of connected nodes
+                connectedNodeIds.add(targetId);
+                
+                // Highlight the connected node
+                const targetSafeId = targetId.replace(/[^a-zA-Z0-9]/g, '_');
+                d3.select(`.node.${targetSafeId} circle`).style("opacity", 1);
+            });
+        }
+        
+        function resetHighlighting() {
+            // Reset all highlights
+            d3.selectAll(".link").style("opacity", 0.6).style("stroke-width", 1);
+            d3.selectAll(".node circle").style("opacity", 1);
+        }
+        
+        // Simulation tick
+        simulation.on("tick", () => {
+            link
+                .attr("x1", d => {
+                    return typeof d.source === 'object' ? d.source.x : graphData.nodes[d.source].x;
+                })
+                .attr("y1", d => {
+                    return typeof d.source === 'object' ? d.source.y : graphData.nodes[d.source].y;
+                })
+                .attr("x2", d => {
+                    return typeof d.target === 'object' ? d.target.x : graphData.nodes[d.target].x;
+                })
+                .attr("y2", d => {
+                    return typeof d.target === 'object' ? d.target.y : graphData.nodes[d.target].y;
+                });
+            
+            node.attr("transform", d => `translate(${d.x},${d.y})`);
+        });
+        
+        // Drag functions
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+        
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+        
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+        
+        // Controls
+        d3.select("#zoom-in").on("click", () => {
+            svg.transition().call(zoom.scaleBy, 1.5);
+        });
+        
+        d3.select("#zoom-out").on("click", () => {
+            svg.transition().call(zoom.scaleBy, 0.75);
+        });
+        
+        d3.select("#reset").on("click", () => {
+            svg.transition().call(zoom.transform, d3.zoomIdentity);
+        });
+        
+        // Toggle labels
+        let labelsVisible = false;
+        d3.select("#toggle-labels").on("click", () => {
+            labelsVisible = !labelsVisible;
+            labels.style("display", labelsVisible ? "block" : "none");
+            d3.select("#toggle-labels").classed("active", labelsVisible);
+        });
+        
+        // Toggle potential dependencies
+        d3.select("#toggle-potential").on("click", () => {
+            potentialDepsVisible = !potentialDepsVisible;
+            d3.selectAll(".link-type-potential").style("visibility", potentialDepsVisible ? "visible" : "hidden");
+            d3.select(".potential-dependency").style("visibility", potentialDepsVisible ? "visible" : "hidden");
+            
+            // Re-highlight connections if a node is selected
+            if (selectedNode) {
+                highlightConnections(selectedNode);
+            }
+            
+            const button = d3.select("#toggle-potential");
+            button.classed("active", potentialDepsVisible);
+            button.text(potentialDepsVisible ? "Hide Potential Dependencies" : "Show Potential Dependencies");
+        });
+        
+        // Initial zoom to fit
+        const initialTransform = d3.zoomIdentity
+            .translate(width / 2, height / 2)
+            .scale(0.8)
+            .translate(-width / 2, -height / 2);
+        
+        svg.call(zoom.transform, initialTransform);
+    </script>
+</body>
+</html>
+    
