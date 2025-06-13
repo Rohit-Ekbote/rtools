@@ -16,8 +16,7 @@ from typing import Dict, List, Set, Tuple, Optional
 
 # Import the visualization modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from arg_mermaid import generate_mermaid_diagram
-from arg_html import generate_html_diagram
+
 
 def truncate_subscription_id(subscription_id: str) -> str:
     """
@@ -873,6 +872,7 @@ def main():
 
     # Generate HTML output if requested
     if not args.no_html:
+        from arg_html import generate_html_diagram
         html_file = f"{args.output}.html"
         print("Generating interactive HTML diagram...")
         generate_html_diagram(
@@ -888,6 +888,7 @@ def main():
 
     # Generate Markdown output if requested
     if not args.no_md:
+        from arg_mermaid import generate_mermaid_diagram
         md_file = f"{args.output}.md"
         print("Generating mermaid diagram...")
         mermaid_diagram = generate_mermaid_diagram(
