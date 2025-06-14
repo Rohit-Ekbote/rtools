@@ -12,11 +12,24 @@ import json
 import subprocess
 import sys
 import os
-from typing import Dict, List, Set, Tuple, Optional
+import time
+from typing import Dict, List, Set, Tuple, Optional, Any, Callable, TypeVar
+from functools import wraps
 
 # Import the visualization modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Global list to collect non-fatal errors and warnings
+_failed_operations_log: List[str] = []
+
+# Type variable for decorator
+F = TypeVar('F', bound=Callable[..., Any])
+
+def log_failure(message: str):
+    """Logs a failure message that allows the script to continue."""
+    global _failed_operations_log
+    _failed_operations_log.append(message)
+    print(f"Warning: {message}", file=sys.stderr)
 
 def truncate_subscription_id(subscription_id: str) -> str:
     """
@@ -30,28 +43,78 @@ def truncate_subscription_id(subscription_id: str) -> str:
     """
     return subscription_id[:10] + "..."
 
-def run_az_command(command: str) -> dict:
+def retry_with_backoff(max_retries: int = 3, initial_delay: float = 1.0, backoff_factor: float = 2.0) -> Callable[[F], F]:
     """
-    Run an Azure CLI command and return the JSON output.
+    A decorator to retry a function with exponential backoff.
+    
+    Args:
+        max_retries: Maximum number of times to retry the function.
+        initial_delay: Initial delay in seconds before the first retry.
+        backoff_factor: Factor by which the delay increases for each retry.
+    """
+    def decorator(func: F) -> F:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            delay = initial_delay
+            for i in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except subprocess.CalledProcessError as e:
+                    # Check for throttling or other retryable errors
+                    stderr_output = e.stderr.decode() if e.stderr else ""
+                    if "RateLimiting" in stderr_output or "TooManyRequests" in stderr_output or "Throttled" in stderr_output:
+                        log_failure(f"Attempt {i+1}/{max_retries+1}: Command failed due to throttling. Retrying in {delay:.2f}s. Command: {args[0] if args else 'N/A'}")
+                        if i < max_retries:
+                            time.sleep(delay)
+                            delay *= backoff_factor
+                        else:
+                            log_failure(f"Max retries reached for command: {args[0] if args else 'N/A'}. Giving up.")
+                            raise # Re-raise the last exception if max retries reached
+                    else:
+                        # For non-retryable errors, re-raise immediately
+                        raise
+                except Exception as e:
+                    log_failure(f"Attempt {i+1}/{max_retries+1}: An unexpected error occurred. Retrying in {delay:.2f}s. Error: {e}")
+                    if i < max_retries:
+                        time.sleep(delay)
+                        delay *= backoff_factor
+                    else:
+                        log_failure(f"Max retries reached for unexpected error. Giving up.")
+                        raise
+            return None # Should not be reached
+        return wrapper
+    return decorator
+
+@retry_with_backoff()
+def run_az_command(command: str) -> Optional[Any]:
+    """
+    Run an Azure CLI command and return its output (JSON parsed or raw string).
     
     Args:
         command: The Azure CLI command to run
         
     Returns:
-        The parsed JSON output of the command
+        The parsed JSON output (dict/list), raw string output, or None if an error occurs.
     """
     try:
-        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return json.loads(result.stdout)
+        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        if result.stdout.strip():
+            try:
+                return json.loads(result.stdout)
+            except json.JSONDecodeError:
+                # If not valid JSON, return the raw string output
+                return result.stdout.strip()
+        return None # Command ran successfully but returned no output
     except subprocess.CalledProcessError as e:
-        print(f"Error running command: {command}")
-        print(f"Error: {e.stderr.decode()}")
-        sys.exit(1)
-    except json.JSONDecodeError:
-        print(f"Error parsing JSON output from command: {command}")
-        sys.exit(1)
+        # This will be caught by the decorator's exception handling
+        raise
+    except Exception as e: # Catch any other unexpected errors
+        # This will be caught by the decorator's exception handling
+        raise
 
-def run_az_command_list(command: List[str], subscription_id: str = None) -> dict:
+@retry_with_backoff()
+def run_az_command_list(command: List[str], subscription_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Run an Azure CLI command from a list and return the JSON output.
     
@@ -62,12 +125,13 @@ def run_az_command_list(command: List[str], subscription_id: str = None) -> dict
     Returns:
         The parsed JSON output of the command
     """
+    full_command = list(command) # Create a copy to avoid modifying the original list
     try:
         if subscription_id:
-            command.extend(['--subscription', subscription_id])
+            full_command.extend(['--subscription', subscription_id])
         
         result = subprocess.run(
-            command,
+            full_command,
             capture_output=True,
             text=True,
             check=True
@@ -78,11 +142,14 @@ def run_az_command_list(command: List[str], subscription_id: str = None) -> dict
         return {}
         
     except subprocess.CalledProcessError as e:
-        print(f"Error running command {' '.join(command)}: {e.stderr}")
-        return {}
+        # This will be caught by the decorator's exception handling
+        raise
     except json.JSONDecodeError as e:
-        print(f"Error parsing JSON response: {e}")
+        log_failure(f"Error parsing JSON response from command {' '.join(full_command)}: {e}")
         return {}
+    except Exception as e:
+        # This will be caught by the decorator's exception handling
+        raise
 
 def check_az_cli_installed() -> bool:
     """Check if Azure CLI is installed."""
@@ -100,12 +167,24 @@ def check_az_cli_logged_in() -> bool:
     except subprocess.CalledProcessError:
         return False
 
-def get_subscription_id() -> str:
+def get_subscription_id() -> Optional[str]:
     """Get the current Azure subscription ID."""
-    result = run_az_command("az account show --query id -o json")
-    return result.strip('"')
+    try:
+        result = run_az_command("az account show --query id -o json")
+        if result is None:
+            log_failure("Failed to retrieve subscription ID.")
+            return None
+        if isinstance(result, str):
+            return result.strip('"')
+        elif isinstance(result, dict) and 'id' in result:
+            return result['id']
+        log_failure(f"Unexpected format for subscription ID: {result}")
+        return None
+    except Exception as e:
+        log_failure(f"Error in get_subscription_id: {e}")
+        return None
 
-def list_resource_groups(subscription_id: str) -> List[dict]:
+def list_resource_groups(subscription_id: str) -> List[Dict[str, Any]]:
     """
     List all resource groups in the subscription.
     
@@ -116,16 +195,30 @@ def list_resource_groups(subscription_id: str) -> List[dict]:
         A list of resource group objects
     """
     query = f"ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where subscriptionId == '{subscription_id}' | project name, id"
-    result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
-    return result.get('data', [])
+    try:
+        result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
+        if result is None:
+            log_failure(f"Failed to retrieve resource groups for subscription {subscription_id}.")
+            return []
+        if isinstance(result, dict):
+            return result.get('data', [])
+        log_failure(f"Unexpected format for resource groups: {result}")
+        return []
+    except Exception as e:
+        log_failure(f"Error in list_resource_groups for subscription {subscription_id}: {e}")
+        return []
 
-def get_network_information(resource: Dict[str, any], subscription_id: str) -> Dict[str, any]:
+def get_network_information(resource: Dict[str, Any], subscription_id: str) -> Dict[str, Any]:
     """Get network information for addressable resources"""
     resource_type = resource.get('type', '').lower()
     resource_group = resource.get('resourceGroup', '')
     name = resource.get('name', '')
     network_info = {}
     
+    if not resource_group or not name:
+        log_failure(f"Skipping network info for resource {name} due to missing resourceGroup or name.")
+        return network_info
+
     try:
         # Virtual Machines
         if 'microsoft.compute/virtualmachines' in resource_type:
@@ -165,9 +258,14 @@ def get_network_information(resource: Dict[str, any], subscription_id: str) -> D
             ], subscription_id)
             if lb_details:
                 frontend_ips = []
-                for frontend in lb_details.get('frontendIPConfigurations', []):
-                    if frontend.get('publicIPAddress'):
-                        frontend_ips.append(frontend['publicIPAddress'].get('id', '').split('/')[-1])
+                frontend_configs = lb_details.get('frontendIPConfigurations', [])
+                if isinstance(frontend_configs, list):
+                    for frontend in frontend_configs:
+                        public_ip_address = frontend.get('publicIPAddress')
+                        if public_ip_address and isinstance(public_ip_address, dict):
+                            frontend_ips.append(public_ip_address.get('id', '').split('/')[-1])
+                else:
+                    log_failure(f"Unexpected format for 'frontendIPConfigurations' in LB {name}. Expected list, got {type(frontend_configs)}.")
                 network_info['frontendIPs'] = frontend_ips
         
         # App Services
@@ -196,16 +294,20 @@ def get_network_information(resource: Dict[str, any], subscription_id: str) -> D
                 network_info['endpoints'] = primary_endpoints
         
     except Exception as e:
-        print(f"Error getting network info for {name}: {str(e)}")
+        log_failure(f"Error getting network info for {name} ({resource_type}): {str(e)}")
         
     return network_info
 
-def get_environment_variables(resource: Dict[str, any], subscription_id: str) -> Dict[str, any]:
+def get_environment_variables(resource: Dict[str, Any], subscription_id: str) -> Dict[str, Any]:
     """Get environment variables for supported resources"""
     resource_type = resource.get('type', '').lower()
     resource_group = resource.get('resourceGroup', '')
     name = resource.get('name', '')
     env_vars = {}
+
+    if not resource_group or not name:
+        log_failure(f"Skipping environment variables for resource {name} due to missing resourceGroup or name.")
+        return env_vars
     
     try:
         # App Service / Web Apps
@@ -216,7 +318,7 @@ def get_environment_variables(resource: Dict[str, any], subscription_id: str) ->
                 '--name', name
             ], subscription_id)
             if isinstance(app_settings, list):
-                env_vars['appSettings'] = {setting['name']: setting['value'] for setting in app_settings}
+                env_vars['appSettings'] = {setting.get('name'): setting.get('value') for setting in app_settings if isinstance(setting, dict) and setting.get('name')}
             
             # Get connection strings
             conn_strings = run_az_command_list([
@@ -225,7 +327,7 @@ def get_environment_variables(resource: Dict[str, any], subscription_id: str) ->
                 '--name', name
             ], subscription_id)
             if isinstance(conn_strings, list):
-                env_vars['connectionStrings'] = {cs['name']: cs['value'] for cs in conn_strings}
+                env_vars['connectionStrings'] = {cs.get('name'): cs.get('value') for cs in conn_strings if isinstance(cs, dict) and cs.get('name')}
         
         # Function Apps
         elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() == 'functionapp':
@@ -235,7 +337,7 @@ def get_environment_variables(resource: Dict[str, any], subscription_id: str) ->
                 '--name', name
             ], subscription_id)
             if isinstance(func_settings, list):
-                env_vars['functionAppSettings'] = {setting['name']: setting['value'] for setting in func_settings}
+                env_vars['functionAppSettings'] = {setting.get('name'): setting.get('value') for setting in func_settings if isinstance(setting, dict) and setting.get('name')}
         
         # Container Instances
         elif 'microsoft.containerinstance/containergroups' in resource_type:
@@ -246,27 +348,34 @@ def get_environment_variables(resource: Dict[str, any], subscription_id: str) ->
             ], subscription_id)
             if container_details:
                 containers = container_details.get('containers', [])
-                for i, container in enumerate(containers):
-                    if container.get('environmentVariables'):
-                        env_vars[f'container_{i}_env'] = {
-                            env['name']: env.get('value', env.get('secureValue', 'SECURE_VALUE'))
-                            for env in container['environmentVariables']
-                        }
+                if isinstance(containers, list):
+                    for i, container in enumerate(containers):
+                        if isinstance(container, dict) and container.get('environmentVariables'):
+                            env_vars[f'container_{i}_env'] = {
+                                env.get('name'): env.get('value', env.get('secureValue', 'SECURE_VALUE'))
+                                for env in container['environmentVariables'] if isinstance(env, dict) and env.get('name')
+                            }
+                else:
+                    log_failure(f"Unexpected format for 'containers' in Container Group {name}. Expected list, got {type(containers)}.")
                         
     except Exception as e:
-        print(f"Error getting environment variables for {name}: {str(e)}")
+        log_failure(f"Error getting environment variables for {name} ({resource_type}): {str(e)}")
         
     return env_vars
 
-def get_resource_specific_config(resource: Dict[str, any], subscription_id: str) -> Dict[str, any]:
+def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str) -> Dict[str, Any]:
     """Get resource-specific configuration details"""
     resource_type = resource.get('type', '').lower()
     resource_group = resource.get('resourceGroup', '')
     name = resource.get('name', '')
     config = {}
+
+    if not resource_group or not name:
+        log_failure(f"Skipping specific config for resource {name} due to missing resourceGroup or name.")
+        return config
     
     try:
-        # Virtual Machines - Get VM size, OS info, etc.
+        # Virtual Machines
         if 'microsoft.compute/virtualmachines' in resource_type:
             vm_details = run_az_command_list([
                 'az', 'vm', 'show',
@@ -281,7 +390,7 @@ def get_resource_specific_config(resource: Dict[str, any], subscription_id: str)
                     'adminUsername': vm_details.get('osProfile', {}).get('adminUsername')
                 })
         
-        # Storage Accounts - Get SKU, access tier, etc.
+        # Storage Accounts
         elif 'microsoft.storage/storageaccounts' in resource_type:
             storage_details = run_az_command_list([
                 'az', 'storage', 'account', 'show',
@@ -299,7 +408,11 @@ def get_resource_specific_config(resource: Dict[str, any], subscription_id: str)
         # SQL Databases
         elif 'microsoft.sql/servers/databases' in resource_type:
             # Extract server name from resource ID
-            server_name = resource.get('id', '').split('/')[8] if len(resource.get('id', '').split('/')) > 8 else ''
+            resource_id_parts = resource.get('id', '').split('/')
+            server_name = ''
+            if len(resource_id_parts) > 8:
+                server_name = resource_id_parts[8]
+            
             if server_name:
                 db_details = run_az_command_list([
                     'az', 'sql', 'db', 'show',
@@ -314,6 +427,8 @@ def get_resource_specific_config(resource: Dict[str, any], subscription_id: str)
                         'maxSizeBytes': db_details.get('maxSizeBytes'),
                         'collation': db_details.get('collation')
                     })
+            else:
+                log_failure(f"Could not extract server name from resource ID for SQL Database {name}.")
         
         # Key Vaults
         elif 'microsoft.keyvault/vaults' in resource_type:
@@ -323,19 +438,24 @@ def get_resource_specific_config(resource: Dict[str, any], subscription_id: str)
                 '--name', name
             ], subscription_id)
             if kv_details:
+                properties_dict = kv_details.get('properties', {})
+                access_policies = properties_dict.get('accessPolicies', [])
+                if not isinstance(access_policies, list):
+                    log_failure(f"Unexpected format for 'accessPolicies' in Key Vault {name}. Expected list, got {type(access_policies)}.")
+                    access_policies = []
                 config.update({
-                    'sku': kv_details.get('properties', {}).get('sku'),
-                    'accessPolicies': kv_details.get('properties', {}).get('accessPolicies'),
-                    'enabledForDeployment': kv_details.get('properties', {}).get('enabledForDeployment'),
-                    'enabledForTemplateDeployment': kv_details.get('properties', {}).get('enabledForTemplateDeployment')
+                    'sku': properties_dict.get('sku'),
+                    'accessPolicies': access_policies,
+                    'enabledForDeployment': properties_dict.get('enabledForDeployment'),
+                    'enabledForTemplateDeployment': properties_dict.get('enabledForTemplateDeployment')
                 })
                 
     except Exception as e:
-        print(f"Error getting specific config for {name}: {str(e)}")
+        log_failure(f"Error getting specific config for {name} ({resource_type}): {str(e)}")
         
     return config
 
-def list_resources_basic(subscription_id: str) -> List[dict]:
+def list_resources_basic(subscription_id: str) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with basic information.
     
@@ -346,10 +466,20 @@ def list_resources_basic(subscription_id: str) -> List[dict]:
         A list of basic resource objects
     """
     query = f"Resources | where subscriptionId == '{subscription_id}' | project id, name, type, resourceGroup, kind, location, tags, properties"
-    result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
-    return result.get('data', [])
+    try:
+        result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
+        if result is None:
+            log_failure(f"Failed to retrieve basic resources for subscription {subscription_id}.")
+            return []
+        if isinstance(result, dict):
+            return result.get('data', [])
+        log_failure(f"Unexpected format for basic resources: {result}")
+        return []
+    except Exception as e:
+        log_failure(f"Error in list_resources_basic for subscription {subscription_id}: {e}")
+        return []
 
-def list_resources(subscription_id: str, basic_mode: bool = False) -> List[dict]:
+def list_resources(subscription_id: str, basic_mode: bool = False) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with enhanced details.
     
@@ -367,16 +497,39 @@ def list_resources(subscription_id: str, basic_mode: bool = False) -> List[dict]
     print("Using enhanced mode - gathering detailed resource information...")
     print("Fetching basic resource information...")
     query = f"Resources | where subscriptionId == '{subscription_id}' | project id, name, type, resourceGroup, kind, location, tags"
-    result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
-    basic_resources = result.get('data', [])
     
+    basic_resources = []
+    try:
+        result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
+        if result is None:
+            log_failure(f"Failed to retrieve basic resources for subscription {subscription_id}.")
+        elif isinstance(result, dict):
+            basic_resources = result.get('data', [])
+        else:
+            log_failure(f"Unexpected format for basic resources: {result}")
+    except Exception as e:
+        log_failure(f"Error fetching basic resource information for subscription {subscription_id}: {e}")
+
     enhanced_resources = []
     total_resources = len(basic_resources)
     
     print(f"Enhancing resource details for {total_resources} resources...")
     for i, resource in enumerate(basic_resources, 1):
-        print(f"Processing resource {i}/{total_resources}: {resource.get('name', 'Unknown')}")
+        resource_name = resource.get('name', 'Unknown')
+        resource_id = resource.get('id')
+        resource_type = resource.get('type')
+
+        print(f"Processing resource {i}/{total_resources}: {resource_name}")
         
+        if not resource_id:
+            log_failure(f"Resource {resource_name} missing 'id', skipping detailed enhancement.")
+            enhanced_resources.append(resource)
+            continue
+        if not resource_type:
+            log_failure(f"Resource {resource_name} ({resource_id}) missing 'type', skipping detailed enhancement.")
+            enhanced_resources.append(resource)
+            continue
+
         try:
             # Get enhanced resource details
             enhanced_resource = resource.copy()
@@ -397,23 +550,33 @@ def list_resources(subscription_id: str, basic_mode: bool = False) -> List[dict]
                 enhanced_resource['specificConfiguration'] = specific_config
             
             # Get properties from Resource Graph for dependency analysis
-            resource_id = resource['id']
             properties_query = f"Resources | where id == '{resource_id}' | project properties"
-            properties_result = run_az_command(f"az graph query -q \"{properties_query}\" --subscription {subscription_id}")
-            if properties_result.get('data'):
-                enhanced_resource['properties'] = properties_result['data'][0].get('properties', {})
+            try:
+                properties_result = run_az_command(f"az graph query -q \"{properties_query}\" --subscription {subscription_id}")
+                
+                if properties_result is not None and isinstance(properties_result, dict) and properties_result.get('data'):
+                    if properties_result['data'] and isinstance(properties_result['data'][0], dict):
+                        enhanced_resource['properties'] = properties_result['data'][0].get('properties', {})
+                    else:
+                        log_failure(f"Properties query for {resource_id} returned unexpected data format: {properties_result}")
+                elif properties_result is not None:
+                    log_failure(f"Properties query for {resource_id} returned no data or unexpected type: {properties_result}")
+                else:
+                    log_failure(f"Failed to retrieve properties for {resource_id}.")
+            except Exception as e:
+                log_failure(f"Error retrieving properties for {resource_id}: {e}")
             
             enhanced_resources.append(enhanced_resource)
             
         except Exception as e:
-            print(f"Warning: Error enhancing resource {resource.get('name', 'Unknown')}: {str(e)}")
+            log_failure(f"Error enhancing resource {resource_name} ({resource_id}): {str(e)}")
             # Add basic resource info if enhancement fails
             enhanced_resources.append(resource)
     
     print(f"Enhanced {len(enhanced_resources)} resources with detailed information")
     return enhanced_resources
 
-def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
+def get_resource_dependencies(subscription_id: str, resources: List[Dict[str, Any]]) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
     """
     Identify dependencies between resources using enhanced resource information.
     
@@ -424,24 +587,34 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
     Returns:
         A tuple containing (confirmed_dependencies, potential_dependencies) dictionaries mapping resource IDs to sets of dependent resource IDs
     """
-    confirmed_dependencies = {}
-    potential_dependencies = {}
+    confirmed_dependencies: Dict[str, Set[str]] = {}
+    potential_dependencies: Dict[str, Set[str]] = {}
     
     # Initialize empty dependency sets for all resources
     for resource in resources:
-        confirmed_dependencies[resource['id']] = set()
-        potential_dependencies[resource['id']] = set()
+        resource_id = resource.get('id')
+        if resource_id:
+            confirmed_dependencies[resource_id] = set()
+            potential_dependencies[resource_id] = set()
+        else:
+            log_failure(f"Resource missing 'id', cannot initialize for dependency tracking: {resource.get('name', 'Unknown')}")
     
     print("Analyzing resource dependencies with enhanced information...")
     
     # Check for different types of dependencies
     for resource in resources:
-        resource_id = resource['id']
-        resource_type = resource['type']
+        resource_id = resource.get('id')
+        resource_type = resource.get('type')
+        
+        if not resource_id:
+            log_failure(f"Resource missing 'id', skipping dependency analysis for {resource.get('name', 'Unknown')}.")
+            continue
+        if not resource_type:
+            log_failure(f"Resource {resource_id} missing 'type', skipping dependency analysis.")
+            continue
         
         # Use enhanced properties if available, otherwise use basic properties
         properties = resource.get('properties', {})
-        properties_str = json.dumps(properties)
         
         # Enhanced dependency detection using environment variables
         env_vars = resource.get('environmentVariables', {})
@@ -461,8 +634,9 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
         })
         
         for potential_dep in resources:
-            if potential_dep['id'] != resource_id and potential_dep['id'] in all_resource_data:
-                confirmed_dependencies[resource_id].add(potential_dep['id'])
+            potential_dep_id = potential_dep.get('id')
+            if potential_dep_id and potential_dep_id != resource_id and potential_dep_id in all_resource_data:
+                confirmed_dependencies[resource_id].add(potential_dep_id)
         
         # Enhanced dependency detection using environment variables (potential dependencies)
         if env_vars:
@@ -510,65 +684,96 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
         # Type-specific dependency detection (confirmed dependencies from properties)
         if resource_type == 'microsoft.app/containerapps':
             # Container Apps depend on their environment and registry
-            if properties and 'managedEnvironmentId' in properties:
-                env_id = properties['managedEnvironmentId']
-                confirmed_dependencies[resource_id].add(env_id)
+            managed_environment_id = properties.get('managedEnvironmentId')
+            if managed_environment_id:
+                confirmed_dependencies[resource_id].add(managed_environment_id)
             
             # Container Apps secret references and registry dependencies
-            if properties and 'configuration' in properties:
-                config = properties['configuration']
-                
+            config = properties.get('configuration')
+            if isinstance(config, dict):
                 # Registry dependencies
-                if 'registries' in config:
-                    for registry in config['registries']:
+                registries = config.get('registries', [])
+                if not isinstance(registries, list):
+                    log_failure(f"Unexpected format for 'registries' in resource {resource_id}. Expected list, got {type(registries)}. Skipping registry dependencies.")
+                    registries = [] # Ensure it's an empty list to prevent TypeError
+                for registry in registries:
+                    if isinstance(registry, dict):
                         server = registry.get('server', '')
                         # Find the ACR resource by matching the login server
                         for potential_acr in resources:
-                            if potential_acr['type'] == 'microsoft.containerregistry/registries':
-                                acr_query = f"Resources | where id == '{potential_acr['id']}' | project properties.loginServer"
-                                acr_result = run_az_command(f"az graph query -q \"{acr_query}\" --subscription {subscription_id}")
-                                if acr_result.get('data') and acr_result['data'][0].get('properties.loginServer') == server:
-                                    confirmed_dependencies[resource_id].add(potential_acr['id'])
+                            potential_acr_type = potential_acr.get('type')
+                            if potential_acr_type == 'microsoft.containerregistry/registries':
+                                try:
+                                    acr_query = f"Resources | where id == '{potential_acr.get('id')}' | project properties.loginServer"
+                                    acr_result = run_az_command(f"az graph query -q \"{acr_query}\" --subscription {subscription_id}")
+                                    if acr_result is not None and isinstance(acr_result, dict) and acr_result.get('data'):
+                                        if acr_result['data'] and isinstance(acr_result['data'][0], dict):
+                                            if acr_result['data'][0].get('properties.loginServer') == server:
+                                                confirmed_dependencies[resource_id].add(potential_acr['id'])
+                                        else:
+                                            log_failure(f"ACR query for {potential_acr.get('id')} returned unexpected data format: {acr_result}")
+                                    elif acr_result is not None:
+                                        log_failure(f"ACR query for {potential_acr.get('id')} returned no data or unexpected type: {acr_result}")
+                                    else:
+                                        log_failure(f"Failed to retrieve ACR login server for {potential_acr.get('id')}.")
+                                except Exception as e:
+                                    log_failure(f"Error retrieving ACR login server for {potential_acr.get('id')}: {e}")
                 
                 # Secret references that might point to Key Vault or other services
-                if 'secrets' in config:
-                    for secret in config['secrets']:
+                secrets = config.get('secrets', [])
+                if not isinstance(secrets, list):
+                    log_failure(f"Unexpected format for 'secrets' in resource {resource_id}. Expected list, got {type(secrets)}. Skipping secret dependencies.")
+                    secrets = []
+                for secret in secrets:
+                    if isinstance(secret, dict):
                         secret_name = secret.get('name', '')
                         # Common patterns for secret names that indicate dependencies
                         if 'keyvault' in secret_name.lower() or 'kv' in secret_name.lower():
                             for potential_kv in resources:
-                                if potential_kv['type'] == 'microsoft.keyvault/vaults':
+                                if potential_kv.get('type') == 'microsoft.keyvault/vaults':
                                     potential_dependencies[resource_id].add(potential_kv['id'])
                         elif 'storage' in secret_name.lower():
                             for potential_storage in resources:
-                                if potential_storage['type'] == 'microsoft.storage/storageaccounts':
+                                if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
                                     potential_dependencies[resource_id].add(potential_storage['id'])
                         elif 'database' in secret_name.lower() or 'db' in secret_name.lower():
                             for potential_db in resources:
-                                if potential_db['type'] in ['microsoft.sql/servers', 'microsoft.documentdb/databaseaccounts', 'microsoft.dbforpostgresql/flexibleservers']:
+                                potential_db_type = potential_db.get('type')
+                                if potential_db_type in ['microsoft.sql/servers', 'microsoft.documentdb/databaseaccounts', 'microsoft.dbforpostgresql/flexibleservers']:
                                     potential_dependencies[resource_id].add(potential_db['id'])
             
             # Environment variable secret references
-            if properties and 'template' in properties and 'containers' in properties['template']:
-                for container in properties['template']['containers']:
-                    if 'env' in container:
-                        for env_var in container['env']:
-                            if 'secretRef' in env_var:
+            template = properties.get('template')
+            if isinstance(template, dict):
+                containers = template.get('containers', [])
+                if not isinstance(containers, list):
+                    log_failure(f"Unexpected format for 'containers' in resource {resource_id} template. Expected list, got {type(containers)}. Skipping container env dependencies.")
+                    containers = []
+                for container in containers:
+                    if isinstance(container, dict) and 'env' in container:
+                        env_list = container.get('env', [])
+                        if not isinstance(env_list, list):
+                            log_failure(f"Unexpected format for 'env' in container of resource {resource_id}. Expected list, got {type(env_list)}. Skipping env var dependencies.")
+                            env_list = []
+                        for env_var in env_list:
+                            if isinstance(env_var, dict) and 'secretRef' in env_var:
                                 secret_ref = env_var['secretRef']
                                 # Analyze secret reference patterns
                                 if 'appinsights' in secret_ref.lower():
                                     for potential_insights in resources:
-                                        if potential_insights['type'] == 'microsoft.insights/components':
+                                        if potential_insights.get('type') == 'microsoft.insights/components':
                                             potential_dependencies[resource_id].add(potential_insights['id'])
                                 elif 'webpubsub' in secret_ref.lower() or 'signalr' in secret_ref.lower():
                                     for potential_signalr in resources:
-                                        if potential_signalr['type'] in ['microsoft.signalrservice/signalr', 'microsoft.signalrservice/webpubsub']:
+                                        potential_signalr_type = potential_signalr.get('type')
+                                        if potential_signalr_type in ['microsoft.signalrservice/signalr', 'microsoft.signalrservice/webpubsub']:
                                             potential_dependencies[resource_id].add(potential_signalr['id'])
         
         elif resource_type == 'microsoft.web/sites':
             # Web Apps often depend on App Service Plans (confirmed dependency)
-            if properties and 'serverFarmId' in properties:
-                confirmed_dependencies[resource_id].add(properties['serverFarmId'])
+            server_farm_id = properties.get('serverFarmId')
+            if server_farm_id:
+                confirmed_dependencies[resource_id].add(server_farm_id)
             
             # Enhanced App Insights detection using environment variables (potential dependencies)
             if env_vars:
@@ -577,8 +782,8 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
                 for setting_name, setting_value in app_settings.items():
                     if isinstance(setting_value, str) and 'APPLICATIONINSIGHTS' in setting_name.upper():
                         for potential_insights in resources:
-                            if potential_insights['type'] == 'microsoft.insights/components':
-                                if potential_insights['name'] in setting_value:
+                            if potential_insights.get('type') == 'microsoft.insights/components':
+                                if potential_insights.get('name') and potential_insights['name'] in setting_value:
                                     potential_dependencies[resource_id].add(potential_insights['id'])
                 
                 # Look for database connection strings
@@ -588,57 +793,60 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
                         # SQL Database dependencies
                         if 'database.windows.net' in conn_value or 'sql.azuresynapse.net' in conn_value:
                             for potential_sql in resources:
-                                if potential_sql['type'] in ['microsoft.sql/servers', 'microsoft.sql/servers/databases']:
-                                    if potential_sql['name'] in conn_value:
+                                potential_sql_type = potential_sql.get('type')
+                                if potential_sql_type in ['microsoft.sql/servers', 'microsoft.sql/servers/databases']:
+                                    if potential_sql.get('name') and potential_sql['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_sql['id'])
                         
                         # Storage Account dependencies
                         if 'blob.core.windows.net' in conn_value or 'table.core.windows.net' in conn_value or 'queue.core.windows.net' in conn_value or 'file.core.windows.net' in conn_value:
                             for potential_storage in resources:
-                                if potential_storage['type'] == 'microsoft.storage/storageaccounts':
-                                    if potential_storage['name'] in conn_value:
+                                if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
+                                    if potential_storage.get('name') and potential_storage['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_storage['id'])
                         
                         # Cosmos DB dependencies (MongoDB, SQL API, etc.)
                         if 'cosmos.azure.com' in conn_value or 'documents.azure.com' in conn_value:
                             for potential_cosmos in resources:
-                                if potential_cosmos['type'] == 'microsoft.documentdb/databaseaccounts':
-                                    if potential_cosmos['name'] in conn_value:
+                                if potential_cosmos.get('type') == 'microsoft.documentdb/databaseaccounts':
+                                    if potential_cosmos.get('name') and potential_cosmos['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_cosmos['id'])
                         
                         # PostgreSQL dependencies
                         if 'postgres.database.azure.com' in conn_value:
                             for potential_pg in resources:
-                                if potential_pg['type'] in ['microsoft.dbforpostgresql/servers', 'microsoft.dbforpostgresql/flexibleservers']:
-                                    if potential_pg['name'] in conn_value:
+                                potential_pg_type = potential_pg.get('type')
+                                if potential_pg_type in ['microsoft.dbforpostgresql/servers', 'microsoft.dbforpostgresql/flexibleservers']:
+                                    if potential_pg.get('name') and potential_pg['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_pg['id'])
                         
                         # MySQL dependencies
                         if 'mysql.database.azure.com' in conn_value:
                             for potential_mysql in resources:
-                                if potential_mysql['type'] in ['microsoft.dbformysql/servers', 'microsoft.dbformysql/flexibleservers']:
-                                    if potential_mysql['name'] in conn_value:
+                                potential_mysql_type = potential_mysql.get('type')
+                                if potential_mysql_type in ['microsoft.dbformysql/servers', 'microsoft.dbformysql/flexibleservers']:
+                                    if potential_mysql.get('name') and potential_mysql['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_mysql['id'])
                         
                         # Service Bus dependencies
                         if 'servicebus.windows.net' in conn_value:
                             for potential_sb in resources:
-                                if potential_sb['type'] == 'microsoft.servicebus/namespaces':
-                                    if potential_sb['name'] in conn_value:
+                                if potential_sb.get('type') == 'microsoft.servicebus/namespaces':
+                                    if potential_sb.get('name') and potential_sb['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_sb['id'])
                         
                         # Event Hub dependencies
                         if 'servicebus.windows.net' in conn_value and 'EntityPath=' in conn_value:
                             for potential_eh in resources:
-                                if potential_eh['type'] == 'microsoft.eventhub/namespaces':
-                                    if potential_eh['name'] in conn_value:
+                                if potential_eh.get('type') == 'microsoft.eventhub/namespaces':
+                                    if potential_eh.get('name') and potential_eh['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_eh['id'])
                         
                         # Redis Cache dependencies
                         if 'redis.cache.windows.net' in conn_value:
                             for potential_redis in resources:
-                                if potential_redis['type'] == 'microsoft.cache/redis':
-                                    if potential_redis['name'] in conn_value:
+                                if potential_redis.get('type') == 'microsoft.cache/redis':
+                                    if potential_redis.get('name') and potential_redis['name'] in conn_value:
                                         potential_dependencies[resource_id].add(potential_redis['id'])
             
             # Enhanced detection for Key Vault secret references
@@ -649,48 +857,50 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
                         # Key Vault secret references (format: @Microsoft.KeyVault(SecretUri=...))
                         if '@Microsoft.KeyVault' in setting_value or 'vault.azure.net' in setting_value:
                             for potential_kv in resources:
-                                if potential_kv['type'] == 'microsoft.keyvault/vaults':
-                                    if potential_kv['name'] in setting_value:
+                                if potential_kv.get('type') == 'microsoft.keyvault/vaults':
+                                    if potential_kv.get('name') and potential_kv['name'] in setting_value:
                                         potential_dependencies[resource_id].add(potential_kv['id'])
                         
                         # Service Bus connection strings in app settings
                         if 'servicebus.windows.net' in setting_value:
                             for potential_sb in resources:
-                                if potential_sb['type'] == 'microsoft.servicebus/namespaces':
-                                    if potential_sb['name'] in setting_value:
+                                if potential_sb.get('type') == 'microsoft.servicebus/namespaces':
+                                    if potential_sb.get('name') and potential_sb['name'] in setting_value:
                                         potential_dependencies[resource_id].add(potential_sb['id'])
                         
                         # SignalR/Web PubSub connection strings
                         if 'webpubsub.azure.com' in setting_value or 'service.signalr.net' in setting_value:
                             for potential_signalr in resources:
-                                if potential_signalr['type'] in ['microsoft.signalrservice/signalr', 'microsoft.signalrservice/webpubsub']:
-                                    if potential_signalr['name'] in setting_value:
+                                potential_signalr_type = potential_signalr.get('type')
+                                if potential_signalr_type in ['microsoft.signalrservice/signalr', 'microsoft.signalrservice/webpubsub']:
+                                    if potential_signalr.get('name') and potential_signalr['name'] in setting_value:
                                         potential_dependencies[resource_id].add(potential_signalr['id'])
             
             # Check for App Insights connection in properties (confirmed dependency)
             if properties and 'siteConfig' in properties and properties.get('siteConfig') is not None:
-                app_settings = properties.get('siteConfig', {}).get('appSettings')
-                if app_settings:
+                site_config = properties.get('siteConfig', {})
+                app_settings = site_config.get('appSettings', []) # Ensure default is list
+                if app_settings and isinstance(app_settings, list):
                     for setting in app_settings:
-                        if setting.get('name') == 'APPLICATIONINSIGHTS_CONNECTION_STRING' and 'value' in setting:
+                        if isinstance(setting, dict) and setting.get('name') == 'APPLICATIONINSIGHTS_CONNECTION_STRING' and 'value' in setting:
                             conn_string = setting['value']
                             for potential_insights in resources:
-                                if potential_insights['type'] == 'microsoft.insights/components' and potential_insights['name'] in conn_string:
+                                if potential_insights.get('type') == 'microsoft.insights/components' and potential_insights.get('name') and potential_insights['name'] in conn_string:
                                     confirmed_dependencies[resource_id].add(potential_insights['id'])
         
         elif resource_type == 'microsoft.insights/components':
             # Application Insights may depend on storage accounts for logs (potential dependency)
             if specific_config:
                 for potential_storage in resources:
-                    if potential_storage['type'] == 'microsoft.storage/storageaccounts':
+                    if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
                         # Check if storage account is referenced in App Insights config
-                        if potential_storage['name'] in json.dumps(specific_config):
+                        if potential_storage.get('name') and potential_storage['name'] in json.dumps(specific_config):
                             potential_dependencies[resource_id].add(potential_storage['id'])
         
         elif resource_type == 'microsoft.apimanagement/service':
             # APIM often connected to App Insights (potential dependency)
             for potential_insights in resources:
-                if potential_insights['type'] == 'microsoft.insights/components':
+                if potential_insights.get('type') == 'microsoft.insights/components':
                     potential_dependencies[resource_id].add(potential_insights['id'])
             
             # Enhanced APIM dependency detection using configuration (potential dependencies)
@@ -698,8 +908,9 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
                 # Look for backend services, named values, etc.
                 config_str = json.dumps(specific_config)
                 for potential_dep in resources:
-                    if potential_dep['type'] in ['microsoft.web/sites', 'microsoft.storage/storageaccounts', 'microsoft.keyvault/vaults']:
-                        if potential_dep['name'] in config_str:
+                    potential_dep_type = potential_dep.get('type')
+                    if potential_dep_type in ['microsoft.web/sites', 'microsoft.storage/storageaccounts', 'microsoft.keyvault/vaults']:
+                        if potential_dep.get('name') and potential_dep['name'] in config_str:
                             potential_dependencies[resource_id].add(potential_dep['id'])
         
         elif resource_type == 'microsoft.keyvault/vaults':
@@ -707,6 +918,9 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
             # This is typically a reverse dependency, but we can detect some patterns
             if specific_config:
                 access_policies = specific_config.get('accessPolicies', [])
+                if not isinstance(access_policies, list):
+                    log_failure(f"Unexpected format for 'accessPolicies' in Key Vault {resource_id}. Expected list, got {type(access_policies)}.")
+                    access_policies = []
                 for policy in access_policies:
                     if isinstance(policy, dict) and 'objectId' in policy:
                         # Could potentially match this to service principals of other resources
@@ -718,13 +932,16 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
                 # Check for dependencies on storage accounts (for diagnostics, disks)
                 config_str = json.dumps(specific_config)
                 for potential_storage in resources:
-                    if potential_storage['type'] == 'microsoft.storage/storageaccounts':
-                        if potential_storage['name'] in config_str:
+                    if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
+                        if potential_storage.get('name') and potential_storage['name'] in config_str:
                             potential_dependencies[resource_id].add(potential_storage['id'])
             
             # VMs depend on their network interfaces (confirmed dependency)
             if properties and 'networkProfile' in properties:
                 network_interfaces = properties.get('networkProfile', {}).get('networkInterfaces', [])
+                if not isinstance(network_interfaces, list):
+                    log_failure(f"Unexpected format for 'networkInterfaces' in VM {resource_id}. Expected list, got {type(network_interfaces)}.")
+                    network_interfaces = []
                 for nic in network_interfaces:
                     if isinstance(nic, dict) and 'id' in nic:
                         confirmed_dependencies[resource_id].add(nic['id'])
@@ -733,36 +950,42 @@ def get_resource_dependencies(subscription_id: str, resources: List[dict]) -> Tu
             # Storage accounts may have network restrictions pointing to VNets (confirmed dependency)
             if specific_config and 'networkRuleSet' in specific_config:
                 network_rules = specific_config.get('networkRuleSet', {})
-                if 'virtualNetworkRules' in network_rules:
-                    for vnet_rule in network_rules['virtualNetworkRules']:
-                        if isinstance(vnet_rule, dict) and 'id' in vnet_rule:
-                            # This points to a subnet, we need to find the parent VNet
-                            subnet_id = vnet_rule['id']
-                            for potential_vnet in resources:
-                                if potential_vnet['type'] == 'microsoft.network/virtualnetworks':
-                                    if potential_vnet['id'] in subnet_id:
-                                        confirmed_dependencies[resource_id].add(potential_vnet['id'])
+                virtual_network_rules = network_rules.get('virtualNetworkRules', [])
+                if not isinstance(virtual_network_rules, list):
+                    log_failure(f"Unexpected format for 'virtualNetworkRules' in Storage Account {resource_id}. Expected list, got {type(virtual_network_rules)}.")
+                    virtual_network_rules = []
+                for vnet_rule in virtual_network_rules:
+                    if isinstance(vnet_rule, dict) and 'id' in vnet_rule:
+                        # This points to a subnet, we need to find the parent VNet
+                        subnet_id = vnet_rule['id']
+                        for potential_vnet in resources:
+                            if potential_vnet.get('type') == 'microsoft.network/virtualnetworks':
+                                if potential_vnet.get('id') and potential_vnet['id'] in subnet_id:
+                                    confirmed_dependencies[resource_id].add(potential_vnet['id'])
     
     # Add common implicit dependencies based on resource types (potential dependencies)
     for resource in resources:
-        resource_id = resource['id']
-        resource_type = resource['type']
+        resource_id = resource.get('id')
+        resource_type = resource.get('type')
+
+        if not resource_id:
+            continue
         
         # Add implicit dependency for dashboard -> App Insights
         if resource_type == 'microsoft.portal/dashboards':
             for potential_dep in resources:
-                if potential_dep['type'] == 'microsoft.insights/components':
+                if potential_dep.get('type') == 'microsoft.insights/components':
                     potential_dependencies[resource_id].add(potential_dep['id'])
         
         # Container App Environment -> App Insights
         if resource_type == 'microsoft.app/managedenvironments':
             for potential_dep in resources:
-                if potential_dep['type'] == 'microsoft.insights/components':
+                if potential_dep.get('type') == 'microsoft.insights/components':
                     potential_dependencies[resource_id].add(potential_dep['id'])
     
     return confirmed_dependencies, potential_dependencies
 
-def get_resource_data(subscription_id: str = None, basic_mode: bool = False) -> Tuple[str, List[dict], List[dict], Dict[str, Set[str]], Dict[str, Set[str]]]:
+def get_resource_data(subscription_id: Optional[str] = None, basic_mode: bool = False) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Set[str]], Dict[str, Set[str]]]:
     """
     Collect all Azure resource data needed for visualization.
     
@@ -785,7 +1008,10 @@ def get_resource_data(subscription_id: str = None, basic_mode: bool = False) -> 
     # Get subscription ID
     if not subscription_id:
         subscription_id = get_subscription_id()
-        
+        if not subscription_id:
+            print("Error: Could not determine Azure subscription ID. Exiting.")
+            sys.exit(1)
+            
     truncated_sub_id = truncate_subscription_id(subscription_id)
     print(f"Using subscription: {truncated_sub_id}")
     
@@ -826,9 +1052,15 @@ def main():
     # Determine whether to collect data or use existing file
     data_file = f"{args.output}.json"
     
+    subscription_id: Optional[str] = args.subscription
+    resources: List[Dict[str, Any]] = []
+    resource_groups: List[Dict[str, Any]] = []
+    confirmed_dependencies: Dict[str, Set[str]] = {}
+    potential_dependencies: Dict[str, Set[str]] = {}
+
     if not args.no_data:
         # Query Azure for resource data
-        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(args.subscription, args.basic_mode)
+        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(subscription_id, args.basic_mode)
         
         # Save data to file
         deps_serializable = {k: list(v) for k, v in confirmed_dependencies.items()}
@@ -848,72 +1080,93 @@ def main():
                 'enhanced_resources': sum(1 for r in resources if any(key in r for key in ['networkInfo', 'environmentVariables', 'specificConfiguration'])) if not args.basic_mode else 0
             }
         }
-        with open(data_file, 'w') as f:
-            json.dump(data, f, indent=2)
-        print(f"Resource data saved to {data_file}")
-        if not args.basic_mode:
-            print(f"Enhanced data includes network info, environment variables, and detailed configurations")
+        try:
+            with open(data_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            print(f"Resource data saved to {data_file}")
+            if not args.basic_mode:
+                print(f"Enhanced data includes network info, environment variables, and detailed configurations")
+        except IOError as e:
+            log_failure(f"Error saving data to file {data_file}: {e}")
     else:
         try:
             print(f"Loading resource data from {data_file}...")
             with open(data_file, 'r') as f:
                 data = json.load(f)
-                subscription_id = data['subscription_id']
-                resources = data['resources']
-                resource_groups = data['resource_groups']
-                confirmed_dependencies = {k: set(v) for k, v in data['confirmed_dependencies'].items()}
-                potential_dependencies = {k: set(v) for k, v in data['potential_dependencies'].items()}
+                subscription_id = data.get('subscription_id')
+                resources = data.get('resources', [])
+                resource_groups = data.get('resource_groups', [])
+                confirmed_dependencies = {k: set(v) for k, v in data.get('confirmed_dependencies', {}).items()}
+                potential_dependencies = {k: set(v) for k, v in data.get('potential_dependencies', {}).items()}
+            
+            if not subscription_id:
+                log_failure(f"Loaded data from {data_file} is missing 'subscription_id'. Falling back to querying Azure.")
+                subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(args.subscription, args.basic_mode)
+
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"Error loading data file: {e}")
-            print("Falling back to querying Azure...")
+            log_failure(f"Error loading data file {data_file}: {e}. Falling back to querying Azure...")
             subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(args.subscription, args.basic_mode)
+        except Exception as e:
+            log_failure(f"An unexpected error occurred while loading data from {data_file}: {e}. Falling back to querying Azure...")
+            subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(args.subscription, args.basic_mode)
+
 
     include_potential_deps = not args.no_potential_deps
 
     # Generate HTML output if requested
     if not args.no_html:
-        from arg_html import generate_html_diagram
-        html_file = f"{args.output}.html"
-        print("Generating interactive HTML diagram...")
-        generate_html_diagram(
-            subscription_id, 
-            resources, 
-            resource_groups, 
-            confirmed_dependencies,
-            potential_dependencies,
-            include_potential_deps,
-            html_file
-        )
-        print(f"HTML diagram saved to {html_file}")
+        try:
+            from arg_html import generate_html_diagram
+            html_file = f"{args.output}.html"
+            print("Generating interactive HTML diagram...")
+            generate_html_diagram(
+                subscription_id, 
+                resources, 
+                resource_groups, 
+                confirmed_dependencies,
+                potential_dependencies,
+                include_potential_deps,
+                html_file
+            )
+            print(f"HTML diagram saved to {html_file}")
+        except ImportError:
+            log_failure("Could not import 'arg_html'. HTML visualization will be skipped. Ensure 'arg_html.py' is in the same directory.")
+        except Exception as e:
+            log_failure(f"Error generating HTML diagram: {e}")
 
     # Generate Markdown output if requested
     if not args.no_md:
-        from arg_mermaid import generate_mermaid_diagram
-        md_file = f"{args.output}.md"
-        print("Generating mermaid diagram...")
-        mermaid_diagram = generate_mermaid_diagram(
-            subscription_id, 
-            resources, 
-            resource_groups, 
-            confirmed_dependencies,
-            potential_dependencies,
-            include_potential_deps
-        )
-        
-        # Save to file
-        with open(md_file, 'w') as f:
-            f.write("# Azure Resources Dependency Graph\n\n")
-            f.write("This diagram shows the resources in your Azure subscription and their dependencies.\n\n")
-            f.write("- Resources are displayed with their proper Azure display names and resource names\n")
-            f.write("- Resource types and kinds are included for better identification\n")
-            f.write("- Solid lines represent confirmed dependencies\n")
-            if include_potential_deps:
-                f.write("- Dotted lines represent potential dependencies based on common patterns\n")
-            f.write("\n```mermaid\n")
-            f.write(mermaid_diagram)
-            f.write("\n```\n")
-        
-        print(f"Markdown diagram saved to {md_file}")
+        try:
+            from arg_mermaid import generate_mermaid_diagram
+            md_file = f"{args.output}.md"
+            print("Generating mermaid diagram...")
+            mermaid_diagram = generate_mermaid_diagram(
+                subscription_id, 
+                resources, 
+                resource_groups, 
+                confirmed_dependencies,
+                potential_dependencies,
+                include_potential_deps
+            )
+            
+            # Save to file
+            with open(md_file, 'w') as f:
+                f.write("# Azure Resources Dependency Graph\n\n")
+                f.write("This diagram shows the resources in your Azure subscription and their dependencies.\n\n")
+                f.write("- Resources are displayed with their proper Azure display names and resource names\n")
+                f.write("- Resource types and kinds are included for better identification\n")
+                f.write("- Solid lines represent confirmed dependencies\n")
+                if include_potential_deps:
+                    f.write("- Dotted lines represent potential dependencies based on common patterns\n")
+                f.write("\n```mermaid\n")
+                f.write(mermaid_diagram)
+                f.write("\n```\n")
+            
+            print(f"Markdown diagram saved to {md_file}")
+        except ImportError:
+            log_failure("Could not import 'arg_mermaid'. Markdown visualization will be skipped. Ensure 'arg_mermaid.py' is in the same directory.")
+        except Exception as e:
+            log_failure(f"Error generating Markdown diagram: {e}")
     
     # Print final summary
     mode_msg = "basic mode (faster, less comprehensive)" if args.basic_mode else "enhanced mode (comprehensive resource analysis)"
@@ -933,5 +1186,11 @@ def main():
     else:
         print("To get more detailed resource information and better dependency detection, run without --basic-mode")
 
+    if _failed_operations_log:
+        print("\n--- Summary of Failed Operations (Non-Fatal) ---")
+        for msg in _failed_operations_log:
+            print(f"- {msg}")
+        print("-------------------------------------------------")
+
 if __name__ == "__main__":
-    main() 
+    main()
