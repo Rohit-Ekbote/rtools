@@ -455,17 +455,22 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str)
         
     return config
 
-def list_resources_basic(subscription_id: str) -> List[Dict[str, Any]]:
+def list_resources_basic(subscription_id: str, resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with basic information.
     
     Args:
         subscription_id: The Azure subscription ID
-        
+        resource_ids_to_include: List of resource IDs to include in the data
     Returns:
         A list of basic resource objects
     """
     query = f"Resources | where subscriptionId == '{subscription_id}' | project id, name, type, resourceGroup, kind, location, tags, properties"
+    if resource_ids_to_include:
+        or_id_has = "' or id has '"
+        query += f' | where id has \'{or_id_has.join(resource_ids_to_include)}\''
+    
+    print(f"Query: {query}")
     try:
         result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
         if result is None:
@@ -479,36 +484,23 @@ def list_resources_basic(subscription_id: str) -> List[Dict[str, Any]]:
         log_failure(f"Error in list_resources_basic for subscription {subscription_id}: {e}")
         return []
 
-def list_resources(subscription_id: str, basic_mode: bool = False) -> List[Dict[str, Any]]:
+def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with enhanced details.
     
     Args:
         subscription_id: The Azure subscription ID
-        basic_mode: If True, only gather basic resource information
-        
+        enhanced_mode: If True, only gather basic resource information
+        resource_ids_to_include: List of resource IDs to include in the data
     Returns:
         A list of resource objects with detailed information
     """
-    if basic_mode:
+    basic_resources = list_resources_basic(subscription_id, resource_ids_to_include)
+    if not enhanced_mode:
         print("Using basic mode - gathering resource information without detailed enhancement...")
-        return list_resources_basic(subscription_id)
+        return basic_resources
     
     print("Using enhanced mode - gathering detailed resource information...")
-    print("Fetching basic resource information...")
-    query = f"Resources | where subscriptionId == '{subscription_id}' | project id, name, type, resourceGroup, kind, location, tags"
-    
-    basic_resources = []
-    try:
-        result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
-        if result is None:
-            log_failure(f"Failed to retrieve basic resources for subscription {subscription_id}.")
-        elif isinstance(result, dict):
-            basic_resources = result.get('data', [])
-        else:
-            log_failure(f"Unexpected format for basic resources: {result}")
-    except Exception as e:
-        log_failure(f"Error fetching basic resource information for subscription {subscription_id}: {e}")
 
     enhanced_resources = []
     total_resources = len(basic_resources)
@@ -985,14 +977,14 @@ def get_resource_dependencies(subscription_id: str, resources: List[Dict[str, An
     
     return confirmed_dependencies, potential_dependencies
 
-def get_resource_data(subscription_id: Optional[str] = None, basic_mode: bool = False) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Set[str]], Dict[str, Set[str]]]:
+def get_resource_data(subscription_id: Optional[str] = None, enhanced_mode: bool = False, resource_ids_to_include: List[str] = []) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Set[str]], Dict[str, Set[str]]]:
     """
     Collect all Azure resource data needed for visualization.
     
     Args:
         subscription_id: The Azure subscription ID (if None, uses current subscription)
-        basic_mode: If True, only gather basic resource information
-        
+        enhanced_mode: If True, only gather basic resource information
+        resource_ids_to_include: List of resource IDs to include in the data
     Returns:
         A tuple containing (subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies)
     """
@@ -1021,8 +1013,8 @@ def get_resource_data(subscription_id: Optional[str] = None, basic_mode: bool = 
     print(f"Found {len(resource_groups)} resource groups")
     
     # Get resources (basic or enhanced mode)
-    resources = list_resources(subscription_id, basic_mode)
-    print(f"Found {len(resources)} resources {'(basic mode)' if basic_mode else '(enhanced mode)'}")
+    resources = list_resources(subscription_id, enhanced_mode, resource_ids_to_include)
+    print(f"Found {len(resources)} resources {'(enhanced mode)' if enhanced_mode else '(basic mode)'}")
     
     # Analyze dependencies using enhanced resource data
     confirmed_dependencies, potential_dependencies = get_resource_dependencies(subscription_id, resources)
@@ -1043,25 +1035,30 @@ def main():
     parser.add_argument('--subscription', '-s', type=str, help='Azure subscription ID (if not provided, uses current subscription)')
     parser.add_argument('--no-potential-deps', action='store_true', help='Exclude potential dependencies from the diagram')
     parser.add_argument('--output', '-o', type=str, default='azure_resource_graph', help='Output file path prefix')
-    parser.add_argument('--no-data', action='store_true', help='Use existing data file instead of fetching from Azure')
-    parser.add_argument('--no-html', action='store_true', help='Skip HTML visualization generation')
-    parser.add_argument('--no-md', action='store_true', help='Skip Markdown visualization generation')
-    parser.add_argument('--basic-mode', action='store_true', help='Use basic resource discovery without enhanced details (faster but less comprehensive)')
+    parser.add_argument('--data', action='store_true', help='Use existing data file instead of fetching from Azure')
+    parser.add_argument('--html', action='store_true', help='Skip HTML visualization generation')
+    parser.add_argument('--md', action='store_true', help='Skip Markdown visualization generation')
+    parser.add_argument('--enhanced-mode', action='store_true', help='Use basic resource discovery without enhanced details (faster but less comprehensive)')
+    parser.add_argument('--resource-ids', type=str, help='Comma-separated list of principalIds to filter resources by')
     args = parser.parse_args()
 
     # Determine whether to collect data or use existing file
     data_file = f"{args.output}.json"
     
     subscription_id: Optional[str] = args.subscription
+    resource_ids_to_include: List[str] = []
+    if args.resource_ids:
+        resource_ids_to_include = [pid.strip() for pid in args.resource_ids.split(',')]
+    print(f"Resources to include: {resource_ids_to_include}")
     resources: List[Dict[str, Any]] = []
     resource_groups: List[Dict[str, Any]] = []
     confirmed_dependencies: Dict[str, Set[str]] = {}
     potential_dependencies: Dict[str, Set[str]] = {}
 
-    if not args.no_data:
+    if args.data:
         # Query Azure for resource data
-        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(subscription_id, args.basic_mode)
-        
+        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(subscription_id, args.enhanced_mode, resource_ids_to_include)
+                
         # Save data to file
         deps_serializable = {k: list(v) for k, v in confirmed_dependencies.items()}
         total_confirmed_deps = sum(len(deps) for deps in confirmed_dependencies.values())
@@ -1073,48 +1070,49 @@ def main():
             'confirmed_dependencies': deps_serializable,
             'potential_dependencies': {k: list(v) for k, v in potential_dependencies.items()},
             'metadata': {
-                'enhanced_mode': not args.basic_mode,
+                'enhanced_mode': not args.enhanced_mode,
                 'total_resources': len(resources),
                 'total_confirmed_dependencies': total_confirmed_deps,
                 'total_potential_dependencies': total_potential_deps,
-                'enhanced_resources': sum(1 for r in resources if any(key in r for key in ['networkInfo', 'environmentVariables', 'specificConfiguration'])) if not args.basic_mode else 0
+                'enhanced_resources': sum(1 for r in resources if any(key in r for key in ['networkInfo', 'environmentVariables', 'specificConfiguration'])) if not args.enhanced_mode else 0,
+                'filtered_by_resource_ids': args.resource_ids.split(',') if args.resource_ids else None
             }
         }
+        
         try:
             with open(data_file, 'w') as f:
                 json.dump(data, f, indent=2)
             print(f"Resource data saved to {data_file}")
-            if not args.basic_mode:
+            if not args.enhanced_mode:
                 print(f"Enhanced data includes network info, environment variables, and detailed configurations")
         except IOError as e:
             log_failure(f"Error saving data to file {data_file}: {e}")
-    else:
-        try:
-            print(f"Loading resource data from {data_file}...")
-            with open(data_file, 'r') as f:
-                data = json.load(f)
-                subscription_id = data.get('subscription_id')
-                resources = data.get('resources', [])
-                resource_groups = data.get('resource_groups', [])
-                confirmed_dependencies = {k: set(v) for k, v in data.get('confirmed_dependencies', {}).items()}
-                potential_dependencies = {k: set(v) for k, v in data.get('potential_dependencies', {}).items()}
-            
-            if not subscription_id:
-                log_failure(f"Loaded data from {data_file} is missing 'subscription_id'. Falling back to querying Azure.")
-                subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(args.subscription, args.basic_mode)
 
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            log_failure(f"Error loading data file {data_file}: {e}. Falling back to querying Azure...")
-            subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(args.subscription, args.basic_mode)
-        except Exception as e:
-            log_failure(f"An unexpected error occurred while loading data from {data_file}: {e}. Falling back to querying Azure...")
-            subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(args.subscription, args.basic_mode)
+
+    data_from_output = None
+    with open(data_file, 'r') as f:
+        data_from_output = json.load(f)
+        # Print complete dependency data JSON with markers
+        print("\n" + "="*80)
+        print("DEPENDENCY DATA JSON OUTPUT START")
+        print("="*80)
+        print(json.dumps(data_from_output, indent=2, default=str))
+        print("="*80)
+        print("DEPENDENCY DATA JSON OUTPUT END")
+        print("="*80 + "\n")
+        
+    
+    subscription_id = data_from_output['subscription_id']
+    resources = data_from_output['resources']
+    resource_groups = data_from_output['resource_groups']
+    confirmed_dependencies = data_from_output['confirmed_dependencies']
+    potential_dependencies = data_from_output['potential_dependencies']
 
 
     include_potential_deps = not args.no_potential_deps
 
     # Generate HTML output if requested
-    if not args.no_html:
+    if args.html:
         try:
             from arg_html import generate_html_diagram
             html_file = f"{args.output}.html"
@@ -1135,7 +1133,7 @@ def main():
             log_failure(f"Error generating HTML diagram: {e}")
 
     # Generate Markdown output if requested
-    if not args.no_md:
+    if args.md:
         try:
             from arg_mermaid import generate_mermaid_diagram
             md_file = f"{args.output}.md"
@@ -1158,6 +1156,8 @@ def main():
                 f.write("- Solid lines represent confirmed dependencies\n")
                 if include_potential_deps:
                     f.write("- Dotted lines represent potential dependencies based on common patterns\n")
+                if args.resource_ids:
+                    f.write(f"- Filtered by principalIds: {args.resource_ids}\n")
                 f.write("\n```mermaid\n")
                 f.write(mermaid_diagram)
                 f.write("\n```\n")
@@ -1169,22 +1169,25 @@ def main():
             log_failure(f"Error generating Markdown diagram: {e}")
     
     # Print final summary
-    mode_msg = "basic mode (faster, less comprehensive)" if args.basic_mode else "enhanced mode (comprehensive resource analysis)"
+    mode_msg = "basic mode (faster, less comprehensive)" if not args.enhanced_mode else "enhanced mode (comprehensive resource analysis)"
     print(f"\n✅ Resource graph generation completed using {mode_msg}")
+    
+    if args.resource_ids:
+        print(f"Processed resources filtered by resourceIds: {args.resource_ids}")
     
     if include_potential_deps:
         print("Included both confirmed and potential dependencies.")
     else:
         print("Included only confirmed dependencies. Potential dependencies were excluded.")
     
-    if not args.basic_mode:
+    if args.enhanced_mode:
         print("Enhanced features included:")
         print("  - Network information (IPs, hostnames, endpoints)")
         print("  - Environment variables and configuration settings")
         print("  - Resource-specific detailed configurations")
         print("  - Advanced dependency detection using configuration data")
     else:
-        print("To get more detailed resource information and better dependency detection, run without --basic-mode")
+        print("To get more detailed resource information and better dependency detection, run with --enhanced-mode")
 
     if _failed_operations_log:
         print("\n--- Summary of Failed Operations (Non-Fatal) ---")
