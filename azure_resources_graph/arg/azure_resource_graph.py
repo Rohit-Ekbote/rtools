@@ -184,17 +184,21 @@ def get_subscription_id() -> Optional[str]:
         log_failure(f"Error in get_subscription_id: {e}")
         return None
 
-def list_resource_groups(subscription_id: str) -> List[Dict[str, Any]]:
+def list_resource_groups(subscription_id: str, resource_group_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
     """
     List all resource groups in the subscription.
     
     Args:
         subscription_id: The Azure subscription ID
-        
+        resource_group_ids_to_include: List of resourceGroupIDs to include in the data
     Returns:
         A list of resource group objects
     """
     query = f"ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where subscriptionId == '{subscription_id}' | project name, id"
+    if resource_group_ids_to_include:
+        or_id_has = "' or id has '"
+        query += f' | where id has \'{or_id_has.join(resource_group_ids_to_include)}\''
+    print(f"Resource Group Query: {query}")
     try:
         result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
         if result is None:
@@ -455,7 +459,7 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str)
         
     return config
 
-def list_resources_basic(subscription_id: str, resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
+def list_resources_basic(subscription_id: str, resource_group_ids_to_include: List[str] = [], resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with basic information.
     
@@ -466,11 +470,14 @@ def list_resources_basic(subscription_id: str, resource_ids_to_include: List[str
         A list of basic resource objects
     """
     query = f"Resources | where subscriptionId == '{subscription_id}' | project id, name, type, resourceGroup, kind, location, tags, properties"
+    if resource_group_ids_to_include:
+        or_id_has = "' or resourceGroup has '"
+        query += f' | where resourceGroup has \'{or_id_has.join(resource_group_ids_to_include)}\''
     if resource_ids_to_include:
         or_id_has = "' or id has '"
         query += f' | where id has \'{or_id_has.join(resource_ids_to_include)}\''
     
-    print(f"Query: {query}")
+    print(f"Resource Query: {query}")
     try:
         result = run_az_command(f"az graph query -q \"{query}\" --subscription {subscription_id}")
         if result is None:
@@ -484,7 +491,7 @@ def list_resources_basic(subscription_id: str, resource_ids_to_include: List[str
         log_failure(f"Error in list_resources_basic for subscription {subscription_id}: {e}")
         return []
 
-def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
+def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_group_ids_to_include: List[str] = [], resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with enhanced details.
     
@@ -495,7 +502,7 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_i
     Returns:
         A list of resource objects with detailed information
     """
-    basic_resources = list_resources_basic(subscription_id, resource_ids_to_include)
+    basic_resources = list_resources_basic(subscription_id, resource_group_ids_to_include, resource_ids_to_include)
     if not enhanced_mode:
         print("Using basic mode - gathering resource information without detailed enhancement...")
         return basic_resources
@@ -977,7 +984,7 @@ def get_resource_dependencies(subscription_id: str, resources: List[Dict[str, An
     
     return confirmed_dependencies, potential_dependencies
 
-def get_resource_data(subscription_id: Optional[str] = None, enhanced_mode: bool = False, resource_ids_to_include: List[str] = []) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Set[str]], Dict[str, Set[str]]]:
+def get_resource_data(subscription_id: Optional[str] = None, enhanced_mode: bool = False, resource_group_ids_to_include: List[str] = [], resource_ids_to_include: List[str] = []) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Set[str]], Dict[str, Set[str]]]:
     """
     Collect all Azure resource data needed for visualization.
     
@@ -1009,11 +1016,11 @@ def get_resource_data(subscription_id: Optional[str] = None, enhanced_mode: bool
     
     # Get resources and resource groups
     print("Fetching resource groups...")
-    resource_groups = list_resource_groups(subscription_id)
+    resource_groups = list_resource_groups(subscription_id, resource_group_ids_to_include)
     print(f"Found {len(resource_groups)} resource groups")
     
     # Get resources (basic or enhanced mode)
-    resources = list_resources(subscription_id, enhanced_mode, resource_ids_to_include)
+    resources = list_resources(subscription_id, enhanced_mode, resource_group_ids_to_include, resource_ids_to_include)
     print(f"Found {len(resources)} resources {'(enhanced mode)' if enhanced_mode else '(basic mode)'}")
     
     # Analyze dependencies using enhanced resource data
@@ -1039,7 +1046,8 @@ def main():
     parser.add_argument('--html', action='store_true', help='Skip HTML visualization generation')
     parser.add_argument('--md', action='store_true', help='Skip Markdown visualization generation')
     parser.add_argument('--enhanced-mode', action='store_true', help='Use basic resource discovery without enhanced details (faster but less comprehensive)')
-    parser.add_argument('--resource-ids', type=str, help='Comma-separated list of principalIds to filter resources by')
+    parser.add_argument('--resourcegroup-ids', type=str, help='Comma-separated list of resourceGroupIDs to filter resources by')
+    parser.add_argument('--resource-ids', type=str, help='Comma-separated list of resourceIDs to filter resources by')
     args = parser.parse_args()
 
     # Determine whether to collect data or use existing file
@@ -1047,6 +1055,10 @@ def main():
     
     subscription_id: Optional[str] = args.subscription
     resource_ids_to_include: List[str] = []
+    resource_group_ids_to_include: List[str] = []
+    if args.resourcegroup_ids:
+        resource_group_ids_to_include = [pid.strip() for pid in args.resourcegroup_ids.split(',')]
+    print(f"Resource groups to include: {resource_group_ids_to_include}")
     if args.resource_ids:
         resource_ids_to_include = [pid.strip() for pid in args.resource_ids.split(',')]
     print(f"Resources to include: {resource_ids_to_include}")
@@ -1057,7 +1069,7 @@ def main():
 
     if args.data:
         # Query Azure for resource data
-        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(subscription_id, args.enhanced_mode, resource_ids_to_include)
+        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(subscription_id, args.enhanced_mode, resource_group_ids_to_include, resource_ids_to_include)
                 
         # Save data to file
         deps_serializable = {k: list(v) for k, v in confirmed_dependencies.items()}
