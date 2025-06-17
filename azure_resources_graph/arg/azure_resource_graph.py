@@ -61,7 +61,7 @@ def retry_with_backoff(max_retries: int = 3, initial_delay: float = 1.0, backoff
                     return func(*args, **kwargs)
                 except subprocess.CalledProcessError as e:
                     # Check for throttling or other retryable errors
-                    stderr_output = e.stderr.decode() if e.stderr else ""
+                    stderr_output = e.stderr if e.stderr else str(e)
                     if "RateLimiting" in stderr_output or "TooManyRequests" in stderr_output or "Throttled" in stderr_output:
                         log_failure(f"Attempt {i+1}/{max_retries+1}: Command failed due to throttling. Retrying in {delay:.2f}s. Command: {args[0] if args else 'N/A'}")
                         if i < max_retries:
@@ -71,7 +71,7 @@ def retry_with_backoff(max_retries: int = 3, initial_delay: float = 1.0, backoff
                             log_failure(f"Max retries reached for command: {args[0] if args else 'N/A'}. Giving up.")
                             raise # Re-raise the last exception if max retries reached
                     else:
-                        # For non-retryable errors, re-raise immediately
+                        log_failure(f"Non retryable error encountered, Error: {e}")
                         raise
                 except Exception as e:
                     log_failure(f"Attempt {i+1}/{max_retries+1}: An unexpected error occurred. Retrying in {delay:.2f}s. Error: {e}")
