@@ -7,3 +7,4 @@ azure_resources_graph/arg/azure_resource_graph.json
 azure_resources_graph/arm/azure_dependencies.json
 azure_resources_graph/ard/dependencies.json
 azure_resources_graph/ard/azure_resource_discovery.json
+*wba*.json

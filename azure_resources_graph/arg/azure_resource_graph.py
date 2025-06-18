@@ -61,7 +61,7 @@ def retry_with_backoff(max_retries: int = 3, initial_delay: float = 1.0, backoff
                     return func(*args, **kwargs)
                 except subprocess.CalledProcessError as e:
                     # Check for throttling or other retryable errors
-                    stderr_output = e.stderr if e.stderr else str(e)
+                    stderr_output = e.stderr if e.stderr else "{e}"
                     if "RateLimiting" in stderr_output or "TooManyRequests" in stderr_output or "Throttled" in stderr_output:
                         log_failure(f"Attempt {i+1}/{max_retries+1}: Command failed due to throttling. Retrying in {delay:.2f}s. Command: {args[0] if args else 'N/A'}")
                         if i < max_retries:
@@ -86,7 +86,8 @@ def retry_with_backoff(max_retries: int = 3, initial_delay: float = 1.0, backoff
     return decorator
 
 @retry_with_backoff()
-def run_az_command(command: str) -> Optional[Any]:
+#def run_az_command(command: str) -> Optional[Any]:
+def _run_az_command(command: str) -> Optional[Any]:
     """
     Run an Azure CLI command and return its output (JSON parsed or raw string).
     
@@ -96,6 +97,7 @@ def run_az_command(command: str) -> Optional[Any]:
     Returns:
         The parsed JSON output (dict/list), raw string output, or None if an error occurs.
     """
+    print(f"Executing command: {command}")
     try:
         result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
@@ -113,6 +115,33 @@ def run_az_command(command: str) -> Optional[Any]:
         # This will be caught by the decorator's exception handling
         raise
 
+#def run_az_command_all_pages(command: str) -> list[dict]:
+def run_az_command(command: str) -> list[dict]:
+    all_results = []
+    skip_token = None
+    original_command = command
+
+    while True:
+        command = f"{original_command} --first 1000"
+        if skip_token:
+            command += f" --skip-token \"{skip_token}\""
+
+        try:
+            response = _run_az_command(command)  # Retry handled here
+        except Exception as e:
+            print(f"Failed to fetch page with skipToken={skip_token}: {e}")
+            break
+
+        if not response:
+            break
+
+        all_results.extend(response.get("data", []))
+        skip_token = response.get("skipToken")
+        if not skip_token:
+            break
+
+    return {'data': all_results}
+
 @retry_with_backoff()
 def run_az_command_list(command: List[str], subscription_id: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -125,7 +154,9 @@ def run_az_command_list(command: List[str], subscription_id: Optional[str] = Non
     Returns:
         The parsed JSON output of the command
     """
+    print(f"Executing command: {command}")
     full_command = list(command) # Create a copy to avoid modifying the original list
+    
     try:
         if subscription_id:
             full_command.extend(['--subscription', subscription_id])
@@ -150,6 +181,7 @@ def run_az_command_list(command: List[str], subscription_id: Optional[str] = Non
     except Exception as e:
         # This will be caught by the decorator's exception handling
         raise
+
 
 def check_az_cli_installed() -> bool:
     """Check if Azure CLI is installed."""
@@ -459,13 +491,14 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str)
         
     return config
 
-def list_resources_basic(subscription_id: str, resource_group_ids_to_include: List[str] = [], resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
+def list_resources_basic(subscription_id: str, resource_group_ids_to_include: List[str] = [], resource_types_to_include: List[str] = []) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with basic information.
     
     Args:
         subscription_id: The Azure subscription ID
-        resource_ids_to_include: List of resource IDs to include in the data
+        resource_group_ids_to_include: List of resource group IDs to include in the data
+        resource_types_to_include: List of resource types to include in the data (with Microsoft. prefix added if needed)
     Returns:
         A list of basic resource objects
     """
@@ -473,9 +506,21 @@ def list_resources_basic(subscription_id: str, resource_group_ids_to_include: Li
     if resource_group_ids_to_include:
         or_id_has = "' or resourceGroup has '"
         query += f' | where resourceGroup has \'{or_id_has.join(resource_group_ids_to_include)}\''
-    if resource_ids_to_include:
-        or_id_has = "' or id has '"
-        query += f' | where id has \'{or_id_has.join(resource_ids_to_include)}\''
+    
+    if resource_types_to_include:
+        or_id_has = "' or type has '"
+        query += f' | where type has \'{or_id_has.join(resource_types_to_include)}\''
+        
+    #if resource_types_to_include:
+    #    # Add Microsoft. prefix if not already present and create type filter
+    #    normalized_types = []
+    #    for resource_type in resource_types_to_include:
+    #        if not resource_type.lower().startswith('microsoft.'):
+    #            normalized_types.append(f'microsoft.{resource_type.lower()}')
+    #        else:
+    #            normalized_types.append(resource_type.lower())
+    #    type_conditions = "' or type =~ '".join(normalized_types)
+    #    query += f" | where type =~ '{type_conditions}'"
     
     print(f"Resource Query: {query}")
     try:
@@ -491,18 +536,19 @@ def list_resources_basic(subscription_id: str, resource_group_ids_to_include: Li
         log_failure(f"Error in list_resources_basic for subscription {subscription_id}: {e}")
         return []
 
-def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_group_ids_to_include: List[str] = [], resource_ids_to_include: List[str] = []) -> List[Dict[str, Any]]:
+def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_group_ids_to_include: List[str] = [], resource_types_to_include: List[str] = []) -> List[Dict[str, Any]]:
     """
     List all resources in the subscription with enhanced details.
     
     Args:
         subscription_id: The Azure subscription ID
         enhanced_mode: If True, only gather basic resource information
-        resource_ids_to_include: List of resource IDs to include in the data
+        resource_group_ids_to_include: List of resource group IDs to include in the data
+        resource_types_to_include: List of resource types to include in the data
     Returns:
         A list of resource objects with detailed information
     """
-    basic_resources = list_resources_basic(subscription_id, resource_group_ids_to_include, resource_ids_to_include)
+    basic_resources = list_resources_basic(subscription_id, resource_group_ids_to_include, resource_types_to_include)
     if not enhanced_mode:
         print("Using basic mode - gathering resource information without detailed enhancement...")
         return basic_resources
@@ -984,32 +1030,21 @@ def get_resource_dependencies(subscription_id: str, resources: List[Dict[str, An
     
     return confirmed_dependencies, potential_dependencies
 
-def get_resource_data(subscription_id: Optional[str] = None, enhanced_mode: bool = False, resource_group_ids_to_include: List[str] = [], resource_ids_to_include: List[str] = []) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Set[str]], Dict[str, Set[str]]]:
+def get_resource_data(subscription_id: str, enhanced_mode: bool = False, resource_group_ids_to_include: List[str] = [], resource_types_to_include: List[str] = []) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Set[str]], Dict[str, Set[str]]]:
     """
     Collect all Azure resource data needed for visualization.
     
     Args:
-        subscription_id: The Azure subscription ID (if None, uses current subscription)
+        subscription_id: The Azure subscription ID
         enhanced_mode: If True, only gather basic resource information
-        resource_ids_to_include: List of resource IDs to include in the data
+        resource_group_ids_to_include: List of resource group IDs to include in the data
+        resource_types_to_include: List of resource types to include in the data
     Returns:
-        A tuple containing (subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies)
+        A tuple containing (resources, resource_groups, confirmed_dependencies, potential_dependencies)
     """
-    # Check prerequisites
-    if not check_az_cli_installed():
-        print("Error: Azure CLI not found. Please install it first: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli")
+    if subscription_id == "":
+        print("Error: Could not determine Azure subscription ID. Exiting.")
         sys.exit(1)
-    
-    if not check_az_cli_logged_in():
-        print("Error: Not logged in to Azure. Please run 'az login' first.")
-        sys.exit(1)
-    
-    # Get subscription ID
-    if not subscription_id:
-        subscription_id = get_subscription_id()
-        if not subscription_id:
-            print("Error: Could not determine Azure subscription ID. Exiting.")
-            sys.exit(1)
             
     truncated_sub_id = truncate_subscription_id(subscription_id)
     print(f"Using subscription: {truncated_sub_id}")
@@ -1020,7 +1055,7 @@ def get_resource_data(subscription_id: Optional[str] = None, enhanced_mode: bool
     print(f"Found {len(resource_groups)} resource groups")
     
     # Get resources (basic or enhanced mode)
-    resources = list_resources(subscription_id, enhanced_mode, resource_group_ids_to_include, resource_ids_to_include)
+    resources = list_resources(subscription_id, enhanced_mode, resource_group_ids_to_include, resource_types_to_include)
     print(f"Found {len(resources)} resources {'(enhanced mode)' if enhanced_mode else '(basic mode)'}")
     
     # Analyze dependencies using enhanced resource data
@@ -1040,28 +1075,35 @@ def get_resource_data(subscription_id: Optional[str] = None, enhanced_mode: bool
 def main():
     parser = argparse.ArgumentParser(description='Generate Azure resource dependency graph with enhanced resource discovery')
     parser.add_argument('--subscription', '-s', type=str, help='Azure subscription ID (if not provided, uses current subscription)')
-    parser.add_argument('--no-potential-deps', action='store_true', help='Exclude potential dependencies from the diagram')
+    parser.add_argument('--potential-deps', action='store_true', help='Exclude potential dependencies from the diagram')
     parser.add_argument('--output', '-o', type=str, default='azure_resource_graph', help='Output file path prefix')
     parser.add_argument('--data', action='store_true', help='Use existing data file instead of fetching from Azure')
     parser.add_argument('--html', action='store_true', help='Skip HTML visualization generation')
     parser.add_argument('--md', action='store_true', help='Skip Markdown visualization generation')
     parser.add_argument('--enhanced-mode', action='store_true', help='Use basic resource discovery without enhanced details (faster but less comprehensive)')
     parser.add_argument('--resourcegroup-ids', type=str, help='Comma-separated list of resourceGroupIDs to filter resources by')
-    parser.add_argument('--resource-ids', type=str, help='Comma-separated list of resourceIDs to filter resources by')
+    parser.add_argument('--resource-types', type=str, help='Comma-separated list of resource types to filter resources by (without Microsoft. prefix, e.g., "Web/sites,Storage/storageAccounts")')
     args = parser.parse_args()
 
     # Determine whether to collect data or use existing file
     data_file = f"{args.output}.json"
     
-    subscription_id: Optional[str] = args.subscription
-    resource_ids_to_include: List[str] = []
+    subscription_id: str = args.subscription
+    resource_types_to_include: List[str] = []
     resource_group_ids_to_include: List[str] = []
-    if args.resourcegroup_ids:
+
+    if not args.resourcegroup_ids:
+        print(f"Resource groups to include: ALL")
+    else:
         resource_group_ids_to_include = [pid.strip() for pid in args.resourcegroup_ids.split(',')]
-    print(f"Resource groups to include: {resource_group_ids_to_include}")
-    if args.resource_ids:
-        resource_ids_to_include = [pid.strip() for pid in args.resource_ids.split(',')]
-    print(f"Resources to include: {resource_ids_to_include}")
+        print(f"Resource groups to include: {resource_group_ids_to_include}")
+
+    if not args.resource_types:
+        print(f"Resource types to include: ALL")
+    else:
+        resource_types_to_include = [rt.strip() for rt in args.resource_types.split(',')]
+        print(f"Resource types to include: {resource_types_to_include}")
+
     resources: List[Dict[str, Any]] = []
     resource_groups: List[Dict[str, Any]] = []
     confirmed_dependencies: Dict[str, Set[str]] = {}
@@ -1069,7 +1111,7 @@ def main():
 
     if args.data:
         # Query Azure for resource data
-        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(subscription_id, args.enhanced_mode, resource_group_ids_to_include, resource_ids_to_include)
+        subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies = get_resource_data(subscription_id, args.enhanced_mode, resource_group_ids_to_include, resource_types_to_include)
                 
         # Save data to file
         deps_serializable = {k: list(v) for k, v in confirmed_dependencies.items()}
@@ -1087,7 +1129,7 @@ def main():
                 'total_confirmed_dependencies': total_confirmed_deps,
                 'total_potential_dependencies': total_potential_deps,
                 'enhanced_resources': sum(1 for r in resources if any(key in r for key in ['networkInfo', 'environmentVariables', 'specificConfiguration'])) if not args.enhanced_mode else 0,
-                'filtered_by_resource_ids': args.resource_ids.split(',') if args.resource_ids else None
+                'filtered_by_resource_types': args.resource_types.split(',') if args.resource_types else None
             }
         }
         
@@ -1121,7 +1163,7 @@ def main():
     potential_dependencies = data_from_output['potential_dependencies']
 
 
-    include_potential_deps = not args.no_potential_deps
+    include_potential_deps = args.potential_deps
 
     # Generate HTML output if requested
     if args.html:
@@ -1168,8 +1210,8 @@ def main():
                 f.write("- Solid lines represent confirmed dependencies\n")
                 if include_potential_deps:
                     f.write("- Dotted lines represent potential dependencies based on common patterns\n")
-                if args.resource_ids:
-                    f.write(f"- Filtered by principalIds: {args.resource_ids}\n")
+                if args.resource_types:
+                    f.write(f"- Filtered by resource types: {args.resource_types}\n")
                 f.write("\n```mermaid\n")
                 f.write(mermaid_diagram)
                 f.write("\n```\n")
@@ -1183,9 +1225,12 @@ def main():
     # Print final summary
     mode_msg = "basic mode (faster, less comprehensive)" if not args.enhanced_mode else "enhanced mode (comprehensive resource analysis)"
     print(f"\n✅ Resource graph generation completed using {mode_msg}")
+
+    if args.resourcegroup_ids:
+        print(f"Processed resources filtered by resource group IDs: {args.resourcegroup_ids}")
     
-    if args.resource_ids:
-        print(f"Processed resources filtered by resourceIds: {args.resource_ids}")
+    if args.resource_types:
+        print(f"Processed resources filtered by resource types: {args.resource_types}")
     
     if include_potential_deps:
         print("Included both confirmed and potential dependencies.")
@@ -1208,4 +1253,13 @@ def main():
         print("-------------------------------------------------")
 
 if __name__ == "__main__":
+    # Check prerequisites
+    if not check_az_cli_installed():
+        print("Error: Azure CLI not found. Please install it first: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli")
+        sys.exit(1)
+    
+    if not check_az_cli_logged_in():
+        print("Error: Not logged in to Azure. Please run 'az login' first.")
+        sys.exit(1)
+    
     main()
