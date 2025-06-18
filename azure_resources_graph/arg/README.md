@@ -33,43 +33,91 @@ chmod +x azure_resource_graph.py
 
 ## Usage
 
-Run the tool with your Azure subscription:
+Run the tool with your Azure subscription to generate both data and visualizations:
 
 ```bash
-./azure_resource_graph.py
+./azure_resource_graph.py --data --html --md
 ```
 
 By default, the tool uses your current Azure CLI subscription. You can specify a different subscription:
 
 ```bash
-./azure_resource_graph.py --subscription "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+./azure_resource_graph.py --subscription "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" --data --html --md
 ```
 
-The output will be saved as `azure_resources_diagram.md` by default. You can specify a different output file:
+The output will be saved with the prefix `azure_resource_graph` by default. You can specify a different output prefix:
 
 ```bash
-./azure_resource_graph.py --output "my_diagram.md"
+./azure_resource_graph.py --output "my_resources" --data --html --md
 ```
+
+This will generate:
+- `my_resources.json` - Raw resource data
+- `my_resources.html` - Interactive HTML visualization
+- `my_resources.md` - Mermaid diagram in Markdown format
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
 | `--subscription`, `-s` | Specify the Azure subscription ID (if not provided, uses current subscription) |
-| `--output`, `-o` | Specify the output Markdown file path (default: azure_resources_diagram.md) |
-| `--no-potential-deps` | Exclude potential dependencies from the diagram (show only confirmed dependencies) |
+| `--output`, `-o` | Specify the output file path prefix (default: azure_resource_graph) |
+| `--potential-deps` | Include potential dependencies in the diagram |
+| `--data` | Query Azure for resource data instead of using existing data file |
+| `--html` | Generate interactive HTML visualization |
+| `--md` | Generate Mermaid diagram in Markdown format |
+| `--enhanced-mode` | Use enhanced resource discovery with detailed information (slower but more comprehensive) |
+| `--resourcegroup-ids` | Comma-separated list of resource group IDs to filter resources by |
+| `--resource-types` | Comma-separated list of resource types to filter resources by (without Microsoft. prefix, e.g., "Web/sites,Storage/storageAccounts") |
 
 ### Dependency Types
 
 The tool identifies two types of dependencies:
 
 1. **Confirmed Dependencies** (solid lines): Direct connections found in resource properties that explicitly reference other resources.
-2. **Potential Dependencies** (dotted lines): Inferred connections based on common architectural patterns (can be disabled with `--no-potential-deps`).
+2. **Potential Dependencies** (dotted lines): Inferred connections based on common architectural patterns (can be included with `--potential-deps`).
+
+### Filtering Resources
+
+You can filter resources by resource type or resource group:
+
+```bash
+# Filter by resource types (without Microsoft. prefix)
+./azure_resource_graph.py --resource-types "Web/sites,Storage/storageAccounts,KeyVault/vaults" --data --html --md
+
+# Filter by resource groups
+./azure_resource_graph.py --resourcegroup-ids "rg-prod-web,rg-prod-data" --data --html --md
+
+# Combine filters
+./azure_resource_graph.py --resource-types "Web/sites,App/containerApps" --resourcegroup-ids "rg-prod-web" --data --html --md
+```
+
+#### Common Resource Types (without Microsoft. prefix)
+
+| Resource Type | Description |
+|---------------|-------------|
+| `Web/sites` | App Services (Web Apps) |
+| `Storage/storageAccounts` | Storage Accounts |
+| `KeyVault/vaults` | Key Vaults |
+| `App/containerApps` | Container Apps |
+| `App/managedEnvironments` | Container App Environments |
+| `Compute/virtualMachines` | Virtual Machines |
+| `Network/virtualNetworks` | Virtual Networks |
+| `Sql/servers` | SQL Servers |
+| `Sql/servers/databases` | SQL Databases |
+| `Insights/components` | Application Insights |
+| `ContainerRegistry/registries` | Container Registries |
 
 Example:
 ```bash
 # Include only confirmed dependencies
-./azure_resource_graph.py --no-potential-deps
+./azure_resource_graph.py --data --html --md
+
+# Include potential dependencies for better insight
+./azure_resource_graph.py --potential-deps --data --html --md
+
+# Use enhanced mode for detailed resource analysis
+./azure_resource_graph.py --enhanced-mode --potential-deps --data --html --md
 ```
 
 ## Example Output
