@@ -110,6 +110,7 @@ def _run_az_command(command: str) -> Optional[Any]:
         return None # Command ran successfully but returned no output
     except subprocess.CalledProcessError as e:
         # This will be caught by the decorator's exception handling
+        log_failure(f"Error executing command {' '.join(command)}: {e.stderr}")
         raise
     except Exception as e: # Catch any other unexpected errors
         # This will be caught by the decorator's exception handling
@@ -154,7 +155,7 @@ def run_az_command_list(command: List[str], subscription_id: Optional[str] = Non
     Returns:
         The parsed JSON output of the command
     """
-    print(f"Executing command: {command}")
+    print(f"Executing command: {' '.join(command)}")
     full_command = list(command) # Create a copy to avoid modifying the original list
     
     try:
@@ -174,6 +175,7 @@ def run_az_command_list(command: List[str], subscription_id: Optional[str] = Non
         
     except subprocess.CalledProcessError as e:
         # This will be caught by the decorator's exception handling
+        log_failure(f"Error executing command {' '.join(full_command)}: {e.stderr}")
         raise
     except json.JSONDecodeError as e:
         log_failure(f"Error parsing JSON response from command {' '.join(full_command)}: {e}")
@@ -1124,7 +1126,7 @@ def main():
             'confirmed_dependencies': deps_serializable,
             'potential_dependencies': {k: list(v) for k, v in potential_dependencies.items()},
             'metadata': {
-                'enhanced_mode': not args.enhanced_mode,
+                'enhanced_mode': args.enhanced_mode,
                 'total_resources': len(resources),
                 'total_confirmed_dependencies': total_confirmed_deps,
                 'total_potential_dependencies': total_potential_deps,
