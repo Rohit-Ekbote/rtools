@@ -246,7 +246,7 @@ def list_resource_groups(subscription_id: str, resource_group_ids_to_include: Li
         log_failure(f"Error in list_resource_groups for subscription {subscription_id}: {e}")
         return []
 
-def get_network_information(resource: Dict[str, Any], subscription_id: str) -> Dict[str, Any]:
+def get_network_information(resource: Dict[str, Any], subscription_id: str, detailed_resource_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Get network information for addressable resources"""
     resource_type = resource.get('type', '').lower()
     resource_group = resource.get('resourceGroup', '')
@@ -260,12 +260,16 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str) -> D
     try:
         # Virtual Machines
         if 'microsoft.compute/virtualmachines' == resource_type:
-            vm_details = run_az_command_list([
-                'az', 'vm', 'show',
-                '--resource-group', resource_group,
-                '--name', name,
-                '--show-details'
-            ], subscription_id)
+            if detailed_resource_data:
+                vm_details = detailed_resource_data
+            else:
+                vm_details = run_az_command_list([
+                    'az', 'vm', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name,
+                    '--show-details'
+                ], subscription_id)
+            
             if vm_details:
                 network_info.update({
                     'privateIps': vm_details.get('privateIps', []),
@@ -275,11 +279,15 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str) -> D
         
         # Virtual Machine Scale Sets
         elif 'microsoft.compute/virtualmachinescalesets' == resource_type:
-            vmss_details = run_az_command_list([
-                'az', 'vmss', 'show',
-                '--resource-group', resource_group,
-                '--name', name
-            ], subscription_id)
+            if detailed_resource_data:
+                vmss_details = detailed_resource_data
+            else:
+                vmss_details = run_az_command_list([
+                    'az', 'vmss', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+            
             if vmss_details:
                 # Get basic VMSS network configuration
                 network_profile = vmss_details.get('virtualMachineProfile', {}).get('networkProfile', {})
@@ -376,7 +384,7 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str) -> D
         
     return network_info
 
-def get_environment_variables(resource: Dict[str, Any], subscription_id: str) -> Dict[str, Any]:
+def get_environment_variables(resource: Dict[str, Any], subscription_id: str, detailed_resource_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Get environment variables for supported resources"""
     resource_type = resource.get('type', '').lower()
     resource_group = resource.get('resourceGroup', '')
@@ -418,12 +426,16 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str) ->
                 env_vars['functionAppSettings'] = {setting.get('name'): setting.get('value') for setting in func_settings if isinstance(setting, dict) and setting.get('name')}
         
         # Virtual Machines (can have custom script extensions, cloud-init, and custom data with environment variables)
-        elif 'microsoft.compute/virtualmachines' in resource_type:
-            vm_details = run_az_command_list([
-                'az', 'vm', 'show',
-                '--resource-group', resource_group,
-                '--name', name
-            ], subscription_id)
+        elif 'microsoft.compute/virtualmachines' == resource_type:
+            if detailed_resource_data:
+                vm_details = detailed_resource_data
+            else:
+                vm_details = run_az_command_list([
+                    'az', 'vm', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+            
             if vm_details:
                 # Extract custom data (base64 encoded user data)
                 os_profile = vm_details.get('osProfile', {})
@@ -499,11 +511,15 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str) ->
         
         # Virtual Machine Scale Sets (can have custom script extensions with environment variables)
         elif 'microsoft.compute/virtualmachinescalesets' == resource_type:
-            vmss_details = run_az_command_list([
-                'az', 'vmss', 'show',
-                '--resource-group', resource_group,
-                '--name', name
-            ], subscription_id)
+            if detailed_resource_data:
+                vmss_details = detailed_resource_data
+            else:
+                vmss_details = run_az_command_list([
+                    'az', 'vmss', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+            
             if vmss_details:
                 vm_profile = vmss_details.get('virtualMachineProfile', {})
                 extension_profile = vm_profile.get('extensionProfile', {})
@@ -544,7 +560,7 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str) ->
         
     return env_vars
 
-def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str) -> Dict[str, Any]:
+def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str, detailed_resource_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Get resource-specific configuration details"""
     resource_type = resource.get('type', '').lower()
     resource_group = resource.get('resourceGroup', '')
@@ -558,11 +574,15 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str)
     try:
         # Virtual Machines
         if 'microsoft.compute/virtualmachines' == resource_type:
-            vm_details = run_az_command_list([
-                'az', 'vm', 'show',
-                '--resource-group', resource_group,
-                '--name', name
-            ], subscription_id)
+            if detailed_resource_data:
+                vm_details = detailed_resource_data
+            else:
+                vm_details = run_az_command_list([
+                    'az', 'vm', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+            
             if vm_details:
                 config.update({
                     'vmSize': vm_details.get('hardwareProfile', {}).get('vmSize'),
@@ -573,11 +593,15 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str)
         
         # Virtual Machine Scale Sets
         elif 'microsoft.compute/virtualmachinescalesets' == resource_type:
-            vmss_details = run_az_command_list([
-                'az', 'vmss', 'show',
-                '--resource-group', resource_group,
-                '--name', name
-            ], subscription_id)
+            if detailed_resource_data:
+                vmss_details = detailed_resource_data
+            else:
+                vmss_details = run_az_command_list([
+                    'az', 'vmss', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+            
             if vmss_details:
                 vm_profile = vmss_details.get('virtualMachineProfile', {})
                 config.update({
@@ -730,6 +754,16 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_g
         resource_id = resource.get('id')
         resource_type = resource.get('type')
 
+        if resource_type in [
+            "Microsoft.Insights/metricalerts", 
+            "microsoft.eventgrid/systemtopics", 
+            "microsoft.portal/dashboards",
+            "microsoft.insights/actiongroups",
+            "microsoft.alertsmanagement/smartdetectoralertrules",
+            ]:
+            print(f"Skipping resource {i}/{total_resources}: {resource_name}")
+            continue
+
         print(f"Processing resource {i}/{total_resources}: {resource_name}")
         
         if not resource_id:
@@ -745,18 +779,42 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_g
             # Get enhanced resource details
             enhanced_resource = resource.copy()
             
+            # Fetch detailed resource data once for VM/VMSS to avoid duplicate API calls
+            detailed_resource_data = None
+            if resource_type in ['microsoft.compute/virtualmachines', 'microsoft.compute/virtualmachinescalesets']:
+                resource_group = resource.get('resourceGroup', '')
+                resource_name = resource.get('name', '')
+                
+                if resource_group and resource_name:
+                    try:
+                        if resource_type == 'microsoft.compute/virtualmachines':
+                            detailed_resource_data = run_az_command_list([
+                                'az', 'vm', 'show',
+                                '--resource-group', resource_group,
+                                '--name', resource_name,
+                                '--show-details'
+                            ], subscription_id)
+                        elif resource_type == 'microsoft.compute/virtualmachinescalesets':
+                            detailed_resource_data = run_az_command_list([
+                                'az', 'vmss', 'show',
+                                '--resource-group', resource_group,
+                                '--name', resource_name
+                            ], subscription_id)
+                    except Exception as e:
+                        log_failure(f"Error fetching detailed data for {resource_name} ({resource_type}): {str(e)}")
+            
             # Add network information
-            network_info = get_network_information(resource, subscription_id)
+            network_info = get_network_information(resource, subscription_id, detailed_resource_data)
             if network_info:
                 enhanced_resource['networkInfo'] = network_info
                 
             # Add environment variables
-            env_vars = get_environment_variables(resource, subscription_id)
+            env_vars = get_environment_variables(resource, subscription_id, detailed_resource_data)
             if env_vars:
                 enhanced_resource['environmentVariables'] = env_vars
                 
             # Add resource-specific configurations
-            specific_config = get_resource_specific_config(resource, subscription_id)
+            specific_config = get_resource_specific_config(resource, subscription_id, detailed_resource_data)
             if specific_config:
                 enhanced_resource['specificConfiguration'] = specific_config
             
