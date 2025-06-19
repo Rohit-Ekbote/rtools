@@ -259,7 +259,7 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str) -> D
 
     try:
         # Virtual Machines
-        if 'microsoft.compute/virtualmachines' in resource_type:
+        if 'microsoft.compute/virtualmachines' == resource_type:
             vm_details = run_az_command_list([
                 'az', 'vm', 'show',
                 '--resource-group', resource_group,
@@ -271,6 +271,46 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str) -> D
                     'privateIps': vm_details.get('privateIps', []),
                     'publicIps': vm_details.get('publicIps', []),
                     'fqdns': vm_details.get('fqdns', [])
+                })
+        
+        # Virtual Machine Scale Sets
+        elif 'microsoft.compute/virtualmachinescalesets' == resource_type:
+            vmss_details = run_az_command_list([
+                'az', 'vmss', 'show',
+                '--resource-group', resource_group,
+                '--name', name
+            ], subscription_id)
+            if vmss_details:
+                # Get basic VMSS network configuration
+                network_profile = vmss_details.get('virtualMachineProfile', {}).get('networkProfile', {})
+                network_interface_configs = network_profile.get('networkInterfaceConfigurations', [])
+                
+                public_ips = []
+                load_balancers = []
+                
+                for nic_config in network_interface_configs:
+                    if isinstance(nic_config, dict):
+                        ip_configs = nic_config.get('ipConfigurations', [])
+                        for ip_config in ip_configs:
+                            if isinstance(ip_config, dict):
+                                # Check for public IP configurations
+                                public_ip_config = ip_config.get('publicIPAddressConfiguration')
+                                if public_ip_config:
+                                    public_ips.append(public_ip_config.get('name', 'Unknown'))
+                                
+                                # Check for load balancer backend pools
+                                lb_backend_pools = ip_config.get('loadBalancerBackendAddressPools', [])
+                                for pool in lb_backend_pools:
+                                    if isinstance(pool, dict) and 'id' in pool:
+                                        # Extract load balancer name from the ID
+                                        lb_id_parts = pool['id'].split('/')
+                                        if len(lb_id_parts) >= 9:
+                                            load_balancers.append(lb_id_parts[8])
+                
+                network_info.update({
+                    'publicIPConfigurations': public_ips,
+                    'associatedLoadBalancers': load_balancers,
+                    'instanceCount': vmss_details.get('sku', {}).get('capacity', 0)
                 })
         
         # Public IP Addresses
@@ -377,6 +417,109 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str) ->
             if isinstance(func_settings, list):
                 env_vars['functionAppSettings'] = {setting.get('name'): setting.get('value') for setting in func_settings if isinstance(setting, dict) and setting.get('name')}
         
+        # Virtual Machines (can have custom script extensions, cloud-init, and custom data with environment variables)
+        elif 'microsoft.compute/virtualmachines' in resource_type:
+            vm_details = run_az_command_list([
+                'az', 'vm', 'show',
+                '--resource-group', resource_group,
+                '--name', name
+            ], subscription_id)
+            if vm_details:
+                # Extract custom data (base64 encoded user data)
+                os_profile = vm_details.get('osProfile', {})
+                custom_data = os_profile.get('customData')
+                if custom_data:
+                    env_vars['customData'] = custom_data
+                
+                # Extract cloud-init data for Linux VMs
+                linux_config = os_profile.get('linuxConfiguration', {})
+                if linux_config:
+                    env_vars['linuxConfiguration'] = linux_config
+                
+                # Extract Windows configuration
+                windows_config = os_profile.get('windowsConfiguration', {})
+                if windows_config:
+                    env_vars['windowsConfiguration'] = windows_config
+            
+            # Get VM extensions which may contain environment variables
+            try:
+                vm_extensions = run_az_command_list([
+                    'az', 'vm', 'extension', 'list',
+                    '--resource-group', resource_group,
+                    '--vm-name', name
+                ], subscription_id)
+                
+                if isinstance(vm_extensions, list):
+                    for ext in vm_extensions:
+                        if isinstance(ext, dict):
+                            ext_name = ext.get('name', 'unknown')
+                            ext_type = ext.get('typeHandlerVersion', ext.get('type', 'unknown'))
+                            
+                            # Custom Script Extension for Windows
+                            if 'CustomScriptExtension' in ext.get('type', ''):
+                                settings = ext.get('settings', {})
+                                if isinstance(settings, dict):
+                                    if settings.get('commandToExecute'):
+                                        env_vars[f'extension_{ext_name}_command'] = settings['commandToExecute']
+                                    if settings.get('fileUris'):
+                                        env_vars[f'extension_{ext_name}_fileUris'] = settings['fileUris']
+                            
+                            # Custom Script Extension for Linux
+                            elif 'CustomScript' in ext.get('type', '') and 'Linux' in ext.get('type', ''):
+                                settings = ext.get('settings', {})
+                                if isinstance(settings, dict):
+                                    if settings.get('commandToExecute'):
+                                        env_vars[f'extension_{ext_name}_command'] = settings['commandToExecute']
+                                    if settings.get('script'):
+                                        env_vars[f'extension_{ext_name}_script'] = settings['script']
+                                    if settings.get('fileUris'):
+                                        env_vars[f'extension_{ext_name}_fileUris'] = settings['fileUris']
+                            
+                            # Docker Extension
+                            elif 'DockerExtension' in ext.get('type', ''):
+                                settings = ext.get('settings', {})
+                                if isinstance(settings, dict):
+                                    env_vars[f'extension_{ext_name}_docker'] = settings
+                            
+                            # Other extensions that might have configuration
+                            else:
+                                settings = ext.get('settings', {})
+                                protected_settings = ext.get('protectedSettings', {})
+                                if settings or protected_settings:
+                                    ext_config = {}
+                                    if settings:
+                                        ext_config['settings'] = settings
+                                    if protected_settings:
+                                        ext_config['protectedSettings'] = 'PROTECTED_DATA'  # Don't expose sensitive data
+                                    env_vars[f'extension_{ext_name}_{ext_type}'] = ext_config
+                else:
+                    log_failure(f"Unexpected format for VM extensions in {name}. Expected list, got {type(vm_extensions)}.")
+            except Exception as e:
+                log_failure(f"Error getting VM extensions for {name}: {str(e)}")
+        
+        # Virtual Machine Scale Sets (can have custom script extensions with environment variables)
+        elif 'microsoft.compute/virtualmachinescalesets' == resource_type:
+            vmss_details = run_az_command_list([
+                'az', 'vmss', 'show',
+                '--resource-group', resource_group,
+                '--name', name
+            ], subscription_id)
+            if vmss_details:
+                vm_profile = vmss_details.get('virtualMachineProfile', {})
+                extension_profile = vm_profile.get('extensionProfile', {})
+                extensions = extension_profile.get('extensions', [])
+                
+                if isinstance(extensions, list):
+                    for ext in extensions:
+                        if isinstance(ext, dict):
+                            ext_settings = ext.get('settings', {})
+                            if isinstance(ext_settings, dict) and ext_settings.get('commandToExecute'):
+                                # Extract environment variables from custom script extensions
+                                command = ext_settings['commandToExecute']
+                                env_vars[f'extension_{ext.get("name", "unknown")}_command'] = command
+                else:
+                    log_failure(f"Unexpected format for 'extensions' in VMSS {name}. Expected list, got {type(extensions)}.")
+        
         # Container Instances
         elif 'microsoft.containerinstance/containergroups' in resource_type:
             container_details = run_az_command_list([
@@ -414,7 +557,7 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str)
     
     try:
         # Virtual Machines
-        if 'microsoft.compute/virtualmachines' in resource_type:
+        if 'microsoft.compute/virtualmachines' == resource_type:
             vm_details = run_az_command_list([
                 'az', 'vm', 'show',
                 '--resource-group', resource_group,
@@ -426,6 +569,27 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str)
                     'osType': vm_details.get('storageProfile', {}).get('osDisk', {}).get('osType'),
                     'imageReference': vm_details.get('storageProfile', {}).get('imageReference'),
                     'adminUsername': vm_details.get('osProfile', {}).get('adminUsername')
+                })
+        
+        # Virtual Machine Scale Sets
+        elif 'microsoft.compute/virtualmachinescalesets' == resource_type:
+            vmss_details = run_az_command_list([
+                'az', 'vmss', 'show',
+                '--resource-group', resource_group,
+                '--name', name
+            ], subscription_id)
+            if vmss_details:
+                vm_profile = vmss_details.get('virtualMachineProfile', {})
+                config.update({
+                    'vmSize': vm_profile.get('hardwareProfile', {}).get('vmSize'),
+                    'osType': vm_profile.get('storageProfile', {}).get('osDisk', {}).get('osType'),
+                    'imageReference': vm_profile.get('storageProfile', {}).get('imageReference'),
+                    'adminUsername': vm_profile.get('osProfile', {}).get('adminUsername'),
+                    'capacity': vmss_details.get('sku', {}).get('capacity'),
+                    'upgradePolicy': vmss_details.get('upgradePolicy'),
+                    'provisioningState': vmss_details.get('provisioningState'),
+                    'overprovision': vmss_details.get('overprovision'),
+                    'singlePlacementGroup': vmss_details.get('singlePlacementGroup')
                 })
         
         # Storage Accounts
@@ -992,6 +1156,86 @@ def get_resource_dependencies(subscription_id: str, resources: List[Dict[str, An
                 for nic in network_interfaces:
                     if isinstance(nic, dict) and 'id' in nic:
                         confirmed_dependencies[resource_id].add(nic['id'])
+        
+        elif resource_type == 'microsoft.compute/virtualmachinescalesets':
+            # VMSS depend on various resources (potential dependencies from config)
+            if specific_config:
+                # Check for dependencies on storage accounts (for diagnostics, disks)
+                config_str = json.dumps(specific_config)
+                for potential_storage in resources:
+                    if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
+                        if potential_storage.get('name') and potential_storage['name'] in config_str:
+                            potential_dependencies[resource_id].add(potential_storage['id'])
+            
+            # VMSS depend on their network configurations and load balancers (confirmed dependencies)
+            if properties and 'virtualMachineProfile' in properties:
+                vm_profile = properties.get('virtualMachineProfile', {})
+                network_profile = vm_profile.get('networkProfile', {})
+                
+                # Network interface configurations dependencies
+                nic_configs = network_profile.get('networkInterfaceConfigurations', [])
+                if not isinstance(nic_configs, list):
+                    log_failure(f"Unexpected format for 'networkInterfaceConfigurations' in VMSS {resource_id}. Expected list, got {type(nic_configs)}.")
+                    nic_configs = []
+                
+                for nic_config in nic_configs:
+                    if isinstance(nic_config, dict):
+                        ip_configs = nic_config.get('ipConfigurations', [])
+                        if not isinstance(ip_configs, list):
+                            log_failure(f"Unexpected format for 'ipConfigurations' in VMSS {resource_id} NIC config. Expected list, got {type(ip_configs)}.")
+                            ip_configs = []
+                        
+                        for ip_config in ip_configs:
+                            if isinstance(ip_config, dict):
+                                # Subnet dependencies (confirmed)
+                                subnet = ip_config.get('subnet')
+                                if subnet and isinstance(subnet, dict) and 'id' in subnet:
+                                    # This points to a subnet, we need to find the parent VNet
+                                    subnet_id = subnet['id']
+                                    for potential_vnet in resources:
+                                        if potential_vnet.get('type') == 'microsoft.network/virtualnetworks':
+                                            if potential_vnet.get('id') and potential_vnet['id'] in subnet_id:
+                                                confirmed_dependencies[resource_id].add(potential_vnet['id'])
+                                
+                                # Load balancer backend pool dependencies (confirmed)
+                                lb_backend_pools = ip_config.get('loadBalancerBackendAddressPools', [])
+                                if not isinstance(lb_backend_pools, list):
+                                    log_failure(f"Unexpected format for 'loadBalancerBackendAddressPools' in VMSS {resource_id}. Expected list, got {type(lb_backend_pools)}.")
+                                    lb_backend_pools = []
+                                
+                                for pool in lb_backend_pools:
+                                    if isinstance(pool, dict) and 'id' in pool:
+                                        # Extract load balancer ID from the backend pool ID
+                                        pool_id = pool['id']
+                                        # Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Network/loadBalancers/{lb}/backendAddressPools/{pool}
+                                        lb_id_parts = pool_id.split('/')
+                                        if len(lb_id_parts) >= 9:
+                                            lb_id = '/'.join(lb_id_parts[:9])  # Get the load balancer ID
+                                            confirmed_dependencies[resource_id].add(lb_id)
+                                
+                                # Load balancer inbound NAT pool dependencies (confirmed)
+                                lb_inbound_nat_pools = ip_config.get('loadBalancerInboundNatPools', [])
+                                if not isinstance(lb_inbound_nat_pools, list):
+                                    log_failure(f"Unexpected format for 'loadBalancerInboundNatPools' in VMSS {resource_id}. Expected list, got {type(lb_inbound_nat_pools)}.")
+                                    lb_inbound_nat_pools = []
+                                
+                                for nat_pool in lb_inbound_nat_pools:
+                                    if isinstance(nat_pool, dict) and 'id' in nat_pool:
+                                        # Extract load balancer ID from the NAT pool ID
+                                        nat_pool_id = nat_pool['id']
+                                        lb_id_parts = nat_pool_id.split('/')
+                                        if len(lb_id_parts) >= 9:
+                                            lb_id = '/'.join(lb_id_parts[:9])  # Get the load balancer ID
+                                            confirmed_dependencies[resource_id].add(lb_id)
+            
+            # VMSS may depend on Application Gateway backend pools (potential dependencies)
+            if network_info:
+                associated_load_balancers = network_info.get('associatedLoadBalancers', [])
+                for lb_name in associated_load_balancers:
+                    # Find load balancer resources by name
+                    for potential_lb in resources:
+                        if potential_lb.get('type') == 'microsoft.network/loadbalancers' and potential_lb.get('name') == lb_name:
+                            confirmed_dependencies[resource_id].add(potential_lb['id'])
         
         elif resource_type == 'microsoft.storage/storageaccounts':
             # Storage accounts may have network restrictions pointing to VNets (confirmed dependency)
