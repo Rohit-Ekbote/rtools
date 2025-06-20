@@ -354,8 +354,8 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str, deta
                     log_failure(f"Unexpected format for 'frontendIPConfigurations' in LB {name}. Expected list, got {type(frontend_configs)}.")
                 network_info['frontendIPs'] = frontend_ips
         
-        # App Services
-        elif 'microsoft.web/sites' in resource_type:
+        # App Services (but NOT Function Apps)
+        elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() != 'functionapp':
             app_details = run_az_command_list([
                 'az', 'webapp', 'show',
                 '--resource-group', resource_group,
@@ -367,6 +367,76 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str, deta
                     'hostNames': app_details.get('hostNames', []),
                     'outboundIpAddresses': app_details.get('outboundIpAddresses', '').split(',') if app_details.get('outboundIpAddresses') else []
                 })
+        
+        # Function Apps - Use comprehensive networking data
+        elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() == 'functionapp':
+            if detailed_resource_data and 'functionAppConfig' in detailed_resource_data:
+                # Use pre-fetched comprehensive Function App data
+                func_config = detailed_resource_data['functionAppConfig']
+                
+                # Basic network info from metadata
+                metadata = func_config.get('metadata', {})
+                if metadata:
+                    network_info.update({
+                        'defaultHostName': metadata.get('defaultHostName'),
+                        'hostNames': metadata.get('hostNames', []),
+                        'outboundIpAddresses': metadata.get('outboundIpAddresses', '').split(',') if metadata.get('outboundIpAddresses') else [],
+                        'possibleOutboundIpAddresses': metadata.get('possibleOutboundIpAddresses', '').split(',') if metadata.get('possibleOutboundIpAddresses') else []
+                    })
+                
+                # VNET Integration
+                vnet_integration = func_config.get('vnetIntegration', [])
+                if vnet_integration and isinstance(vnet_integration, list):
+                    vnet_info = []
+                    for vnet in vnet_integration:
+                        if isinstance(vnet, dict):
+                            vnet_info.append({
+                                'vnetResourceId': vnet.get('vnetResourceId'),
+                                'subnetResourceId': vnet.get('subnetResourceId'),
+                                'name': vnet.get('name')
+                            })
+                    network_info['vnetIntegration'] = vnet_info
+                
+                # Private Endpoints
+                private_endpoints = func_config.get('privateEndpoints', [])
+                if private_endpoints and isinstance(private_endpoints, list):
+                    pe_info = []
+                    for pe in private_endpoints:
+                        if isinstance(pe, dict):
+                            pe_info.append({
+                                'name': pe.get('name'),
+                                'id': pe.get('id'),
+                                'connectionState': pe.get('properties', {}).get('connectionState'),
+                                'privateEndpoint': pe.get('properties', {}).get('privateEndpoint')
+                            })
+                    network_info['privateEndpoints'] = pe_info
+                
+                # Hybrid Connections
+                hybrid_connections = func_config.get('hybridConnections', [])
+                if hybrid_connections and isinstance(hybrid_connections, list):
+                    hc_info = []
+                    for hc in hybrid_connections:
+                        if isinstance(hc, dict):
+                            hc_info.append({
+                                'name': hc.get('name'),
+                                'resourceGroup': hc.get('resourceGroup'),
+                                'hostname': hc.get('hostname'),
+                                'port': hc.get('port')
+                            })
+                    network_info['hybridConnections'] = hc_info
+            else:
+                # Fallback to basic Function App details
+                app_details = run_az_command_list([
+                    'az', 'functionapp', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+                if app_details:
+                    network_info.update({
+                        'defaultHostName': app_details.get('defaultHostName'),
+                        'hostNames': app_details.get('hostNames', []),
+                        'outboundIpAddresses': app_details.get('outboundIpAddresses', '').split(',') if app_details.get('outboundIpAddresses') else []
+                    })
         
         # Storage Accounts
         elif 'microsoft.storage/storageaccounts' in resource_type:
@@ -384,6 +454,92 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str, deta
         
     return network_info
 
+def get_function_app_full_config(resource_group: str, name: str, subscription_id: str) -> Dict[str, Any]:
+    """Get comprehensive Function App configuration data similar to function_app_info.sh"""
+    full_config = {}
+    
+    try:
+        # Function App metadata
+        metadata = run_az_command_list([
+            'az', 'functionapp', 'show',
+            '--resource-group', resource_group,
+            '--name', name
+        ], subscription_id)
+        if metadata:
+            full_config['metadata'] = metadata
+        
+        # App Settings (Environment Variables)
+        app_settings = run_az_command_list([
+            'az', 'functionapp', 'config', 'appsettings', 'list',
+            '--resource-group', resource_group,
+            '--name', name
+        ], subscription_id)
+        if app_settings:
+            full_config['appSettings'] = app_settings
+        
+        # Runtime Configuration
+        config = run_az_command_list([
+            'az', 'functionapp', 'config', 'show',
+            '--resource-group', resource_group,
+            '--name', name
+        ], subscription_id)
+        if config:
+            full_config['config'] = config
+        
+        # Authentication Settings
+        try:
+            auth = run_az_command_list([
+                'az', 'webapp', 'auth', 'show',
+                '--resource-group', resource_group,
+                '--name', name
+            ], subscription_id)
+            if auth:
+                full_config['auth'] = auth
+        except Exception as e:
+            log_failure(f"Error getting auth settings for Function App {name}: {str(e)}")
+        
+        # VNET Integration
+        try:
+            vnet_integration = run_az_command_list([
+                'az', 'functionapp', 'vnet-integration', 'list',
+                '--resource-group', resource_group,
+                '--name', name
+            ], subscription_id)
+            if vnet_integration:
+                full_config['vnetIntegration'] = vnet_integration
+        except Exception as e:
+            log_failure(f"Error getting VNET integration for Function App {name}: {str(e)}")
+        
+        # Private Endpoint Connections
+        try:
+            private_endpoints = run_az_command_list([
+                'az', 'network', 'private-endpoint-connection', 'list',
+                '--resource-group', resource_group,
+                '--name', name,
+                '--type', 'Microsoft.Web/sites'
+            ], subscription_id)
+            if private_endpoints:
+                full_config['privateEndpoints'] = private_endpoints
+        except Exception as e:
+            log_failure(f"Error getting private endpoints for Function App {name}: {str(e)}")
+        
+        # Hybrid Connections
+        try:
+            hybrid_connections = run_az_command_list([
+                'az', 'functionapp', 'hybrid-connection', 'list',
+                '--resource-group', resource_group,
+                '--name', name
+            ], subscription_id)
+            if hybrid_connections:
+                full_config['hybridConnections'] = hybrid_connections
+        except Exception as e:
+            log_failure(f"Error getting hybrid connections for Function App {name}: {str(e)}")
+            
+    except Exception as e:
+        log_failure(f"Error getting full config for Function App {name}: {str(e)}")
+    
+    return full_config
+
 def get_environment_variables(resource: Dict[str, Any], subscription_id: str, detailed_resource_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Get environment variables for supported resources"""
     resource_type = resource.get('type', '').lower()
@@ -396,8 +552,8 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str, de
         return env_vars
     
     try:
-        # App Service / Web Apps
-        if 'microsoft.web/sites' in resource_type:
+        # App Service / Web Apps (but NOT Function Apps)
+        if 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() != 'functionapp':
             app_settings = run_az_command_list([
                 'az', 'webapp', 'config', 'appsettings', 'list',
                 '--resource-group', resource_group,
@@ -415,15 +571,35 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str, de
             if isinstance(conn_strings, list):
                 env_vars['connectionStrings'] = {cs.get('name'): cs.get('value') for cs in conn_strings if isinstance(cs, dict) and cs.get('name')}
         
-        # Function Apps
+        # Function Apps - Use comprehensive configuration
         elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() == 'functionapp':
-            func_settings = run_az_command_list([
-                'az', 'functionapp', 'config', 'appsettings', 'list',
-                '--resource-group', resource_group,
-                '--name', name
-            ], subscription_id)
-            if isinstance(func_settings, list):
-                env_vars['functionAppSettings'] = {setting.get('name'): setting.get('value') for setting in func_settings if isinstance(setting, dict) and setting.get('name')}
+            if detailed_resource_data and 'functionAppConfig' in detailed_resource_data:
+                # Use pre-fetched comprehensive Function App data
+                func_config = detailed_resource_data['functionAppConfig']
+                
+                # App Settings
+                app_settings = func_config.get('appSettings', [])
+                if isinstance(app_settings, list):
+                    env_vars['functionAppSettings'] = {setting.get('name'): setting.get('value') for setting in app_settings if isinstance(setting, dict) and setting.get('name')}
+                
+                # Runtime Configuration
+                runtime_config = func_config.get('config', {})
+                if runtime_config:
+                    env_vars['runtimeConfig'] = runtime_config
+                
+                # Authentication Settings
+                auth_config = func_config.get('auth', {})
+                if auth_config:
+                    env_vars['authConfig'] = auth_config
+            else:
+                # Fallback to basic Function App settings
+                func_settings = run_az_command_list([
+                    'az', 'functionapp', 'config', 'appsettings', 'list',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+                if isinstance(func_settings, list):
+                    env_vars['functionAppSettings'] = {setting.get('name'): setting.get('value') for setting in func_settings if isinstance(setting, dict) and setting.get('name')}
         
         # Virtual Machines (can have custom script extensions, cloud-init, and custom data with environment variables)
         elif 'microsoft.compute/virtualmachines' == resource_type:
@@ -675,6 +851,125 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str,
                     'enabledForDeployment': properties_dict.get('enabledForDeployment'),
                     'enabledForTemplateDeployment': properties_dict.get('enabledForTemplateDeployment')
                 })
+        
+        # Function Apps - Use comprehensive configuration data
+        elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() == 'functionapp':
+            if detailed_resource_data and 'functionAppConfig' in detailed_resource_data:
+                # Use pre-fetched comprehensive Function App data
+                func_config = detailed_resource_data['functionAppConfig']
+                
+                # Runtime and hosting configuration
+                runtime_config = func_config.get('config', {})
+                metadata = func_config.get('metadata', {})
+                
+                if metadata:
+                    config.update({
+                        'state': metadata.get('state'),
+                        'hostingEnvironmentProfile': metadata.get('hostingEnvironmentProfile'),
+                        'serverFarmId': metadata.get('serverFarmId'),
+                        'reserved': metadata.get('reserved'),  # Linux vs Windows
+                        'isXenon': metadata.get('isXenon'),
+                        'hyperV': metadata.get('hyperV'),
+                        'siteConfig': metadata.get('siteConfig', {}),
+                        'scmSiteAlsoStopped': metadata.get('scmSiteAlsoStopped'),
+                        'clientAffinityEnabled': metadata.get('clientAffinityEnabled'),
+                        'clientCertEnabled': metadata.get('clientCertEnabled'),
+                        'httpsOnly': metadata.get('httpsOnly'),
+                        'redundancyMode': metadata.get('redundancyMode'),
+                        'storageAccountRequired': metadata.get('storageAccountRequired')
+                    })
+                
+                if runtime_config:
+                    config.update({
+                        'runtimeConfig': {
+                            'numberOfWorkers': runtime_config.get('numberOfWorkers'),
+                            'defaultDocuments': runtime_config.get('defaultDocuments'),
+                            'netFrameworkVersion': runtime_config.get('netFrameworkVersion'),
+                            'phpVersion': runtime_config.get('phpVersion'),
+                            'pythonVersion': runtime_config.get('pythonVersion'),
+                            'nodeVersion': runtime_config.get('nodeVersion'),
+                            'powerShellVersion': runtime_config.get('powerShellVersion'),
+                            'linuxFxVersion': runtime_config.get('linuxFxVersion'),
+                            'windowsFxVersion': runtime_config.get('windowsFxVersion'),
+                            'requestTracingEnabled': runtime_config.get('requestTracingEnabled'),
+                            'remoteDebuggingEnabled': runtime_config.get('remoteDebuggingEnabled'),
+                            'httpLoggingEnabled': runtime_config.get('httpLoggingEnabled'),
+                            'logsDirectorySizeLimit': runtime_config.get('logsDirectorySizeLimit'),
+                            'detailedErrorLoggingEnabled': runtime_config.get('detailedErrorLoggingEnabled'),
+                            'publishingUsername': runtime_config.get('publishingUsername'),
+                            'appSettings': runtime_config.get('appSettings'),
+                            'connectionStrings': runtime_config.get('connectionStrings'),
+                            'machineKey': runtime_config.get('machineKey'),
+                            'handlerMappings': runtime_config.get('handlerMappings'),
+                            'documentRoot': runtime_config.get('documentRoot'),
+                            'scmType': runtime_config.get('scmType'),
+                            'use32BitWorkerProcess': runtime_config.get('use32BitWorkerProcess'),
+                            'webSocketsEnabled': runtime_config.get('webSocketsEnabled'),
+                            'alwaysOn': runtime_config.get('alwaysOn'),
+                            'javaVersion': runtime_config.get('javaVersion'),
+                            'javaContainer': runtime_config.get('javaContainer'),
+                            'javaContainerVersion': runtime_config.get('javaContainerVersion'),
+                            'managedPipelineMode': runtime_config.get('managedPipelineMode'),
+                            'virtualApplications': runtime_config.get('virtualApplications'),
+                            'loadBalancing': runtime_config.get('loadBalancing'),
+                            'experiments': runtime_config.get('experiments'),
+                            'limits': runtime_config.get('limits'),
+                            'autoHealEnabled': runtime_config.get('autoHealEnabled'),
+                            'autoHealRules': runtime_config.get('autoHealRules'),
+                            'tracingOptions': runtime_config.get('tracingOptions'),
+                            'vnetName': runtime_config.get('vnetName'),
+                            'cors': runtime_config.get('cors'),
+                            'push': runtime_config.get('push'),
+                            'apiDefinition': runtime_config.get('apiDefinition'),
+                            'autoSwapSlotName': runtime_config.get('autoSwapSlotName'),
+                            'localMySqlEnabled': runtime_config.get('localMySqlEnabled'),
+                            'managedServiceIdentityId': runtime_config.get('managedServiceIdentityId'),
+                            'xManagedServiceIdentityId': runtime_config.get('xManagedServiceIdentityId'),
+                            'ipSecurityRestrictions': runtime_config.get('ipSecurityRestrictions'),
+                            'scmIpSecurityRestrictions': runtime_config.get('scmIpSecurityRestrictions'),
+                            'scmIpSecurityRestrictionsUseMain': runtime_config.get('scmIpSecurityRestrictionsUseMain'),
+                            'http20Enabled': runtime_config.get('http20Enabled'),
+                            'minTlsVersion': runtime_config.get('minTlsVersion'),
+                            'ftpsState': runtime_config.get('ftpsState'),
+                            'preWarmedInstanceCount': runtime_config.get('preWarmedInstanceCount'),
+                            'functionAppScaleLimit': runtime_config.get('functionAppScaleLimit'),
+                            'healthCheckPath': runtime_config.get('healthCheckPath'),
+                            'functionsRuntimeScaleMonitoringEnabled': runtime_config.get('functionsRuntimeScaleMonitoringEnabled')
+                        }
+                    })
+                
+                # Authentication configuration
+                auth_config = func_config.get('auth', {})
+                if auth_config:
+                    config['authenticationConfig'] = {
+                        'enabled': auth_config.get('enabled'),
+                        'unauthenticatedClientAction': auth_config.get('unauthenticatedClientAction'),
+                        'tokenStoreEnabled': auth_config.get('tokenStoreEnabled'),
+                        'allowedExternalRedirectUrls': auth_config.get('allowedExternalRedirectUrls'),
+                        'defaultProvider': auth_config.get('defaultProvider'),
+                        'clientId': auth_config.get('clientId'),
+                        'issuer': auth_config.get('issuer'),
+                        'allowedAudiences': auth_config.get('allowedAudiences'),
+                        'additionalLoginParams': auth_config.get('additionalLoginParams'),
+                        'googleClientId': auth_config.get('googleClientId'),
+                        'facebookAppId': auth_config.get('facebookAppId'),
+                        'twitterConsumerKey': auth_config.get('twitterConsumerKey'),
+                        'microsoftAccountClientId': auth_config.get('microsoftAccountClientId')
+                    }
+            else:
+                # Fallback to basic Function App configuration
+                func_details = run_az_command_list([
+                    'az', 'functionapp', 'show',
+                    '--resource-group', resource_group,
+                    '--name', name
+                ], subscription_id)
+                if func_details:
+                    config.update({
+                        'state': func_details.get('state'),
+                        'serverFarmId': func_details.get('serverFarmId'),
+                        'reserved': func_details.get('reserved'),
+                        'httpsOnly': func_details.get('httpsOnly')
+                    })
                 
     except Exception as e:
         log_failure(f"Error getting specific config for {name} ({resource_type}): {str(e)}")
@@ -719,7 +1014,22 @@ def list_resources_basic(subscription_id: str, resource_group_ids_to_include: Li
             log_failure(f"Failed to retrieve basic resources for subscription {subscription_id}.")
             return []
         if isinstance(result, dict):
-            return result.get('data', [])
+            data = result.get('data', [])
+            resources = []
+            for resource in data:
+                resource_type = resource.get('type', '')
+                resource_name = resource.get('name', '')
+                if resource_type in [
+                    "Microsoft.Insights/metricalerts", 
+                    "microsoft.eventgrid/systemtopics", 
+                    "microsoft.portal/dashboards",
+                    "microsoft.insights/actiongroups",
+                    "microsoft.alertsmanagement/smartdetectoralertrules",
+                    ]:
+                    print(f"Skipping resource {resource_type}/{resource_name}")
+                    continue
+                resources.append(resource)
+            return resources
         log_failure(f"Unexpected format for basic resources: {result}")
         return []
     except Exception as e:
@@ -754,15 +1064,6 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_g
         resource_id = resource.get('id')
         resource_type = resource.get('type')
 
-        if resource_type in [
-            "Microsoft.Insights/metricalerts", 
-            "microsoft.eventgrid/systemtopics", 
-            "microsoft.portal/dashboards",
-            "microsoft.insights/actiongroups",
-            "microsoft.alertsmanagement/smartdetectoralertrules",
-            ]:
-            print(f"Skipping resource {i}/{total_resources}: {resource_name}")
-            continue
 
         print(f"Processing resource {i}/{total_resources}: {resource_name}")
         
@@ -779,9 +1080,9 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_g
             # Get enhanced resource details
             enhanced_resource = resource.copy()
             
-            # Fetch detailed resource data once for VM/VMSS to avoid duplicate API calls
+            # Fetch detailed resource data once for VM/VMSS/Function Apps to avoid duplicate API calls
             detailed_resource_data = None
-            if resource_type in ['microsoft.compute/virtualmachines', 'microsoft.compute/virtualmachinescalesets']:
+            if resource_type in ['microsoft.compute/virtualmachines', 'microsoft.compute/virtualmachinescalesets'] or (resource_type == 'microsoft.web/sites' and resource.get('kind', '').lower() == 'functionapp'):
                 resource_group = resource.get('resourceGroup', '')
                 resource_name = resource.get('name', '')
                 
@@ -800,6 +1101,10 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_g
                                 '--resource-group', resource_group,
                                 '--name', resource_name
                             ], subscription_id)
+                        elif resource_type == 'microsoft.web/sites' and resource.get('kind', '').lower() == 'functionapp':
+                            # Get comprehensive Function App configuration
+                            function_app_config = get_function_app_full_config(resource_group, resource_name, subscription_id)
+                            detailed_resource_data = {'functionAppConfig': function_app_config}
                     except Exception as e:
                         log_failure(f"Error fetching detailed data for {resource_name} ({resource_type}): {str(e)}")
             
@@ -1039,123 +1344,229 @@ def get_resource_dependencies(subscription_id: str, resources: List[Dict[str, An
                                             potential_dependencies[resource_id].add(potential_signalr['id'])
         
         elif resource_type == 'microsoft.web/sites':
-            # Web Apps often depend on App Service Plans (confirmed dependency)
-            server_farm_id = properties.get('serverFarmId')
-            if server_farm_id:
-                confirmed_dependencies[resource_id].add(server_farm_id)
+            # Separate handling for Web Apps vs Function Apps
+            is_function_app = resource.get('kind', '').lower() == 'functionapp'
             
-            # Enhanced App Insights detection using environment variables (potential dependencies)
-            if env_vars:
-                app_settings = env_vars.get('appSettings', {})
-                # Look for Application Insights connection strings
-                for setting_name, setting_value in app_settings.items():
-                    if isinstance(setting_value, str) and 'APPLICATIONINSIGHTS' in setting_name.upper():
-                        for potential_insights in resources:
-                            if potential_insights.get('type') == 'microsoft.insights/components':
-                                if potential_insights.get('name') and potential_insights['name'] in setting_value:
-                                    potential_dependencies[resource_id].add(potential_insights['id'])
+            if is_function_app:
+                # Function App specific dependency detection
+                # Function Apps often depend on App Service Plans (confirmed dependency)
+                server_farm_id = properties.get('serverFarmId')
+                if server_farm_id:
+                    confirmed_dependencies[resource_id].add(server_farm_id)
                 
-                # Look for database connection strings
-                conn_strings = env_vars.get('connectionStrings', {})
-                for conn_name, conn_value in conn_strings.items():
-                    if isinstance(conn_value, str):
-                        # SQL Database dependencies
-                        if 'database.windows.net' in conn_value or 'sql.azuresynapse.net' in conn_value:
-                            for potential_sql in resources:
-                                potential_sql_type = potential_sql.get('type')
-                                if potential_sql_type in ['microsoft.sql/servers', 'microsoft.sql/servers/databases']:
-                                    if potential_sql.get('name') and potential_sql['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_sql['id'])
-                        
-                        # Storage Account dependencies
-                        if 'blob.core.windows.net' in conn_value or 'table.core.windows.net' in conn_value or 'queue.core.windows.net' in conn_value or 'file.core.windows.net' in conn_value:
-                            for potential_storage in resources:
-                                if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
-                                    if potential_storage.get('name') and potential_storage['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_storage['id'])
-                        
-                        # Cosmos DB dependencies (MongoDB, SQL API, etc.)
-                        if 'cosmos.azure.com' in conn_value or 'documents.azure.com' in conn_value:
-                            for potential_cosmos in resources:
-                                if potential_cosmos.get('type') == 'microsoft.documentdb/databaseaccounts':
-                                    if potential_cosmos.get('name') and potential_cosmos['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_cosmos['id'])
-                        
-                        # PostgreSQL dependencies
-                        if 'postgres.database.azure.com' in conn_value:
-                            for potential_pg in resources:
-                                potential_pg_type = potential_pg.get('type')
-                                if potential_pg_type in ['microsoft.dbforpostgresql/servers', 'microsoft.dbforpostgresql/flexibleservers']:
-                                    if potential_pg.get('name') and potential_pg['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_pg['id'])
-                        
-                        # MySQL dependencies
-                        if 'mysql.database.azure.com' in conn_value:
-                            for potential_mysql in resources:
-                                potential_mysql_type = potential_mysql.get('type')
-                                if potential_mysql_type in ['microsoft.dbformysql/servers', 'microsoft.dbformysql/flexibleservers']:
-                                    if potential_mysql.get('name') and potential_mysql['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_mysql['id'])
-                        
-                        # Service Bus dependencies
-                        if 'servicebus.windows.net' in conn_value:
-                            for potential_sb in resources:
-                                if potential_sb.get('type') == 'microsoft.servicebus/namespaces':
-                                    if potential_sb.get('name') and potential_sb['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_sb['id'])
-                        
-                        # Event Hub dependencies
-                        if 'servicebus.windows.net' in conn_value and 'EntityPath=' in conn_value:
-                            for potential_eh in resources:
-                                if potential_eh.get('type') == 'microsoft.eventhub/namespaces':
-                                    if potential_eh.get('name') and potential_eh['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_eh['id'])
-                        
-                        # Redis Cache dependencies
-                        if 'redis.cache.windows.net' in conn_value:
-                            for potential_redis in resources:
-                                if potential_redis.get('type') == 'microsoft.cache/redis':
-                                    if potential_redis.get('name') and potential_redis['name'] in conn_value:
-                                        potential_dependencies[resource_id].add(potential_redis['id'])
+                # Enhanced Function App dependency detection using comprehensive configuration
+                if env_vars and 'functionAppSettings' in env_vars:
+                    func_settings = env_vars.get('functionAppSettings', {})
+                    
+                    # Storage Account dependencies (AzureWebJobsStorage is required for Function Apps)
+                    storage_conn_settings = [
+                        'AzureWebJobsStorage', 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING',
+                        'AzureWebJobsDashboard', 'FUNCTIONS_EXTENSION_VERSION'
+                    ]
+                    for setting_name, setting_value in func_settings.items():
+                        if isinstance(setting_value, str):
+                            # Function App storage dependencies (confirmed)
+                            if setting_name in storage_conn_settings and ('blob.core.windows.net' in setting_value or 'file.core.windows.net' in setting_value):
+                                for potential_storage in resources:
+                                    if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
+                                        if potential_storage.get('name') and potential_storage['name'] in setting_value:
+                                            confirmed_dependencies[resource_id].add(potential_storage['id'])
+                            
+                            # Application Insights dependencies (confirmed)
+                            if 'APPLICATIONINSIGHTS' in setting_name.upper():
+                                for potential_insights in resources:
+                                    if potential_insights.get('type') == 'microsoft.insights/components':
+                                        if potential_insights.get('name') and potential_insights['name'] in setting_value:
+                                            confirmed_dependencies[resource_id].add(potential_insights['id'])
+                            
+                            # Key Vault references (confirmed)
+                            if '@Microsoft.KeyVault' in setting_value or 'vault.azure.net' in setting_value:
+                                for potential_kv in resources:
+                                    if potential_kv.get('type') == 'microsoft.keyvault/vaults':
+                                        if potential_kv.get('name') and potential_kv['name'] in setting_value:
+                                            confirmed_dependencies[resource_id].add(potential_kv['id'])
+                            
+                            # Service Bus dependencies (potential)
+                            if 'servicebus.windows.net' in setting_value:
+                                for potential_sb in resources:
+                                    if potential_sb.get('type') == 'microsoft.servicebus/namespaces':
+                                        if potential_sb.get('name') and potential_sb['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_sb['id'])
+                            
+                            # Event Hub dependencies (potential)
+                            if 'servicebus.windows.net' in setting_value and 'EntityPath=' in setting_value:
+                                for potential_eh in resources:
+                                    if potential_eh.get('type') == 'microsoft.eventhub/namespaces':
+                                        if potential_eh.get('name') and potential_eh['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_eh['id'])
+                            
+                            # Cosmos DB dependencies (potential)
+                            if 'cosmos.azure.com' in setting_value or 'documents.azure.com' in setting_value:
+                                for potential_cosmos in resources:
+                                    if potential_cosmos.get('type') == 'microsoft.documentdb/databaseaccounts':
+                                        if potential_cosmos.get('name') and potential_cosmos['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_cosmos['id'])
+                            
+                            # SQL Database dependencies (potential)
+                            if 'database.windows.net' in setting_value or 'sql.azuresynapse.net' in setting_value:
+                                for potential_sql in resources:
+                                    potential_sql_type = potential_sql.get('type')
+                                    if potential_sql_type in ['microsoft.sql/servers', 'microsoft.sql/servers/databases']:
+                                        if potential_sql.get('name') and potential_sql['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_sql['id'])
+                            
+                            # Redis Cache dependencies (potential)
+                            if 'redis.cache.windows.net' in setting_value:
+                                for potential_redis in resources:
+                                    if potential_redis.get('type') == 'microsoft.cache/redis':
+                                        if potential_redis.get('name') and potential_redis['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_redis['id'])
+                
+                # VNET Integration dependencies (confirmed)
+                if network_info and 'vnetIntegration' in network_info:
+                    vnet_integrations = network_info.get('vnetIntegration', [])
+                    for vnet_integration in vnet_integrations:
+                        if isinstance(vnet_integration, dict):
+                            vnet_resource_id = vnet_integration.get('vnetResourceId')
+                            subnet_resource_id = vnet_integration.get('subnetResourceId')
+                            
+                            if vnet_resource_id:
+                                confirmed_dependencies[resource_id].add(vnet_resource_id)
+                            if subnet_resource_id:
+                                # Find the parent VNet from the subnet ID
+                                for potential_vnet in resources:
+                                    if potential_vnet.get('type') == 'microsoft.network/virtualnetworks':
+                                        if potential_vnet.get('id') and potential_vnet['id'] in subnet_resource_id:
+                                            confirmed_dependencies[resource_id].add(potential_vnet['id'])
+                
+                # Private Endpoint dependencies (confirmed)
+                if network_info and 'privateEndpoints' in network_info:
+                    private_endpoints = network_info.get('privateEndpoints', [])
+                    for pe in private_endpoints:
+                        if isinstance(pe, dict):
+                            pe_info = pe.get('privateEndpoint')
+                            if pe_info and isinstance(pe_info, dict) and 'id' in pe_info:
+                                confirmed_dependencies[resource_id].add(pe_info['id'])
             
-            # Enhanced detection for Key Vault secret references
-            if env_vars:
-                app_settings = env_vars.get('appSettings', {})
-                for setting_name, setting_value in app_settings.items():
-                    if isinstance(setting_value, str):
-                        # Key Vault secret references (format: @Microsoft.KeyVault(SecretUri=...))
-                        if '@Microsoft.KeyVault' in setting_value or 'vault.azure.net' in setting_value:
-                            for potential_kv in resources:
-                                if potential_kv.get('type') == 'microsoft.keyvault/vaults':
-                                    if potential_kv.get('name') and potential_kv['name'] in setting_value:
-                                        potential_dependencies[resource_id].add(potential_kv['id'])
-                        
-                        # Service Bus connection strings in app settings
-                        if 'servicebus.windows.net' in setting_value:
-                            for potential_sb in resources:
-                                if potential_sb.get('type') == 'microsoft.servicebus/namespaces':
-                                    if potential_sb.get('name') and potential_sb['name'] in setting_value:
-                                        potential_dependencies[resource_id].add(potential_sb['id'])
-                        
-                        # SignalR/Web PubSub connection strings
-                        if 'webpubsub.azure.com' in setting_value or 'service.signalr.net' in setting_value:
-                            for potential_signalr in resources:
-                                potential_signalr_type = potential_signalr.get('type')
-                                if potential_signalr_type in ['microsoft.signalrservice/signalr', 'microsoft.signalrservice/webpubsub']:
-                                    if potential_signalr.get('name') and potential_signalr['name'] in setting_value:
-                                        potential_dependencies[resource_id].add(potential_signalr['id'])
-            
-            # Check for App Insights connection in properties (confirmed dependency)
-            if properties and 'siteConfig' in properties and properties.get('siteConfig') is not None:
-                site_config = properties.get('siteConfig', {})
-                app_settings = site_config.get('appSettings', []) # Ensure default is list
-                if app_settings and isinstance(app_settings, list):
-                    for setting in app_settings:
-                        if isinstance(setting, dict) and setting.get('name') == 'APPLICATIONINSIGHTS_CONNECTION_STRING' and 'value' in setting:
-                            conn_string = setting['value']
+            else:
+                # Regular Web App dependency detection
+                # Web Apps often depend on App Service Plans (confirmed dependency)
+                server_farm_id = properties.get('serverFarmId')
+                if server_farm_id:
+                    confirmed_dependencies[resource_id].add(server_farm_id)
+                
+                # Enhanced App Insights detection using environment variables (potential dependencies)
+                if env_vars:
+                    app_settings = env_vars.get('appSettings', {})
+                    # Look for Application Insights connection strings
+                    for setting_name, setting_value in app_settings.items():
+                        if isinstance(setting_value, str) and 'APPLICATIONINSIGHTS' in setting_name.upper():
                             for potential_insights in resources:
-                                if potential_insights.get('type') == 'microsoft.insights/components' and potential_insights.get('name') and potential_insights['name'] in conn_string:
-                                    confirmed_dependencies[resource_id].add(potential_insights['id'])
+                                if potential_insights.get('type') == 'microsoft.insights/components':
+                                    if potential_insights.get('name') and potential_insights['name'] in setting_value:
+                                        potential_dependencies[resource_id].add(potential_insights['id'])
+                    
+                    # Look for database connection strings
+                    conn_strings = env_vars.get('connectionStrings', {})
+                    for conn_name, conn_value in conn_strings.items():
+                        if isinstance(conn_value, str):
+                            # SQL Database dependencies
+                            if 'database.windows.net' in conn_value or 'sql.azuresynapse.net' in conn_value:
+                                for potential_sql in resources:
+                                    potential_sql_type = potential_sql.get('type')
+                                    if potential_sql_type in ['microsoft.sql/servers', 'microsoft.sql/servers/databases']:
+                                        if potential_sql.get('name') and potential_sql['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_sql['id'])
+                            
+                            # Storage Account dependencies
+                            if 'blob.core.windows.net' in conn_value or 'table.core.windows.net' in conn_value or 'queue.core.windows.net' in conn_value or 'file.core.windows.net' in conn_value:
+                                for potential_storage in resources:
+                                    if potential_storage.get('type') == 'microsoft.storage/storageaccounts':
+                                        if potential_storage.get('name') and potential_storage['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_storage['id'])
+                            
+                            # Cosmos DB dependencies (MongoDB, SQL API, etc.)
+                            if 'cosmos.azure.com' in conn_value or 'documents.azure.com' in conn_value:
+                                for potential_cosmos in resources:
+                                    if potential_cosmos.get('type') == 'microsoft.documentdb/databaseaccounts':
+                                        if potential_cosmos.get('name') and potential_cosmos['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_cosmos['id'])
+                            
+                            # PostgreSQL dependencies
+                            if 'postgres.database.azure.com' in conn_value:
+                                for potential_pg in resources:
+                                    potential_pg_type = potential_pg.get('type')
+                                    if potential_pg_type in ['microsoft.dbforpostgresql/servers', 'microsoft.dbforpostgresql/flexibleservers']:
+                                        if potential_pg.get('name') and potential_pg['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_pg['id'])
+                            
+                            # MySQL dependencies
+                            if 'mysql.database.azure.com' in conn_value:
+                                for potential_mysql in resources:
+                                    potential_mysql_type = potential_mysql.get('type')
+                                    if potential_mysql_type in ['microsoft.dbformysql/servers', 'microsoft.dbformysql/flexibleservers']:
+                                        if potential_mysql.get('name') and potential_mysql['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_mysql['id'])
+                            
+                            # Service Bus dependencies
+                            if 'servicebus.windows.net' in conn_value:
+                                for potential_sb in resources:
+                                    if potential_sb.get('type') == 'microsoft.servicebus/namespaces':
+                                        if potential_sb.get('name') and potential_sb['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_sb['id'])
+                            
+                            # Event Hub dependencies
+                            if 'servicebus.windows.net' in conn_value and 'EntityPath=' in conn_value:
+                                for potential_eh in resources:
+                                    if potential_eh.get('type') == 'microsoft.eventhub/namespaces':
+                                        if potential_eh.get('name') and potential_eh['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_eh['id'])
+                            
+                            # Redis Cache dependencies
+                            if 'redis.cache.windows.net' in conn_value:
+                                for potential_redis in resources:
+                                    if potential_redis.get('type') == 'microsoft.cache/redis':
+                                        if potential_redis.get('name') and potential_redis['name'] in conn_value:
+                                            potential_dependencies[resource_id].add(potential_redis['id'])
+                
+                # Enhanced detection for Key Vault secret references
+                if env_vars:
+                    app_settings = env_vars.get('appSettings', {})
+                    for setting_name, setting_value in app_settings.items():
+                        if isinstance(setting_value, str):
+                            # Key Vault secret references (format: @Microsoft.KeyVault(SecretUri=...))
+                            if '@Microsoft.KeyVault' in setting_value or 'vault.azure.net' in setting_value:
+                                for potential_kv in resources:
+                                    if potential_kv.get('type') == 'microsoft.keyvault/vaults':
+                                        if potential_kv.get('name') and potential_kv['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_kv['id'])
+                            
+                            # Service Bus connection strings in app settings
+                            if 'servicebus.windows.net' in setting_value:
+                                for potential_sb in resources:
+                                    if potential_sb.get('type') == 'microsoft.servicebus/namespaces':
+                                        if potential_sb.get('name') and potential_sb['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_sb['id'])
+                            
+                            # SignalR/Web PubSub connection strings
+                            if 'webpubsub.azure.com' in setting_value or 'service.signalr.net' in setting_value:
+                                for potential_signalr in resources:
+                                    potential_signalr_type = potential_signalr.get('type')
+                                    if potential_signalr_type in ['microsoft.signalrservice/signalr', 'microsoft.signalrservice/webpubsub']:
+                                        if potential_signalr.get('name') and potential_signalr['name'] in setting_value:
+                                            potential_dependencies[resource_id].add(potential_signalr['id'])
+                
+                # Check for App Insights connection in properties (confirmed dependency)
+                if properties and 'siteConfig' in properties and properties.get('siteConfig') is not None:
+                    site_config = properties.get('siteConfig', {})
+                    app_settings = site_config.get('appSettings', []) # Ensure default is list
+                    if app_settings and isinstance(app_settings, list):
+                        for setting in app_settings:
+                            if isinstance(setting, dict) and setting.get('name') == 'APPLICATIONINSIGHTS_CONNECTION_STRING' and 'value' in setting:
+                                conn_string = setting['value']
+                                for potential_insights in resources:
+                                    if potential_insights.get('type') == 'microsoft.insights/components' and potential_insights.get('name') and potential_insights['name'] in conn_string:
+                                        confirmed_dependencies[resource_id].add(potential_insights['id'])
         
         elif resource_type == 'microsoft.insights/components':
             # Application Insights may depend on storage accounts for logs (potential dependency)
@@ -1367,7 +1778,10 @@ def get_resource_data(subscription_id: str, enhanced_mode: bool = False, resourc
     
     # Print summary of enhanced data collected
     enhanced_count = sum(1 for r in resources if any(key in r for key in ['networkInfo', 'environmentVariables', 'specificConfiguration']))
+    function_app_count = sum(1 for r in resources if r.get('type') == 'microsoft.web/sites' and r.get('kind', '').lower() == 'functionapp')
     print(f"Enhanced {enhanced_count}/{len(resources)} resources with detailed information")
+    if function_app_count > 0:
+        print(f"Processed {function_app_count} Function Apps with comprehensive configuration data")
     
     # Print dependency summary
     total_confirmed_deps = sum(len(deps) for deps in confirmed_dependencies.values())
@@ -1376,6 +1790,19 @@ def get_resource_data(subscription_id: str, enhanced_mode: bool = False, resourc
     
     return subscription_id, resources, resource_groups, confirmed_dependencies, potential_dependencies
 
+def remove_none(d):
+    if isinstance(d, dict):
+        clean_d = {}
+        for k,v in d.items():
+            clean_v = remove_none(v)
+            if clean_v:
+                clean_d[k] = clean_v
+        return clean_d #{k: remove_none(v) for k, v in d.items() if v is not None}
+    elif isinstance(d, list):
+        return [remove_none(i) for i in d if i is not None]
+    else:
+        return d
+    
 def main():
     parser = argparse.ArgumentParser(description='Generate Azure resource dependency graph with enhanced resource discovery')
     parser.add_argument('--subscription', '-s', type=str, help='Azure subscription ID (if not provided, uses current subscription)')
@@ -1440,6 +1867,7 @@ def main():
         try:
             with open(data_file, 'w') as f:
                 json.dump(data, f, indent=2)
+                #json.dump(remove_none(data), f, indent=2)
             print(f"Resource data saved to {data_file}")
             if not args.enhanced_mode:
                 print(f"Enhanced data includes network info, environment variables, and detailed configurations")
@@ -1454,7 +1882,7 @@ def main():
         print("\n" + "="*80)
         print("DEPENDENCY DATA JSON OUTPUT START")
         print("="*80)
-        print(json.dumps(data_from_output, indent=2, default=str))
+        print(json.dumps(remove_none(data_from_output), indent=2, default=str))
         print("="*80)
         print("DEPENDENCY DATA JSON OUTPUT END")
         print("="*80 + "\n")
@@ -1547,8 +1975,10 @@ def main():
         print("  - Environment variables and configuration settings")
         print("  - Resource-specific detailed configurations")
         print("  - Advanced dependency detection using configuration data")
+        print("  - Comprehensive Function App analysis (metadata, VNET integration, private endpoints, hybrid connections)")
     else:
         print("To get more detailed resource information and better dependency detection, run with --enhanced-mode")
+        print("Enhanced mode includes comprehensive Function App configuration analysis")
 
     if _failed_operations_log:
         print("\n--- Summary of Failed Operations (Non-Fatal) ---")
