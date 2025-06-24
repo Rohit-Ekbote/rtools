@@ -355,7 +355,7 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str, deta
                 network_info['frontendIPs'] = frontend_ips
         
         # App Services (but NOT Function Apps)
-        elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() != 'functionapp':
+        elif 'microsoft.web/sites' in resource_type and 'functionapp' not in resource.get('kind', '').lower():
             app_details = run_az_command_list([
                 'az', 'webapp', 'show',
                 '--resource-group', resource_group,
@@ -369,7 +369,7 @@ def get_network_information(resource: Dict[str, Any], subscription_id: str, deta
                 })
         
         # Function Apps - Use comprehensive networking data
-        elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() == 'functionapp':
+        elif 'microsoft.web/sites' in resource_type and 'functionapp' in resource.get('kind', '').lower():
             if detailed_resource_data and 'functionAppConfig' in detailed_resource_data:
                 # Use pre-fetched comprehensive Function App data
                 func_config = detailed_resource_data['functionAppConfig']
@@ -553,7 +553,7 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str, de
     
     try:
         # App Service / Web Apps (but NOT Function Apps)
-        if 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() != 'functionapp':
+        if 'microsoft.web/sites' in resource_type and 'functionapp' in resource.get('kind', '').lower():
             app_settings = run_az_command_list([
                 'az', 'webapp', 'config', 'appsettings', 'list',
                 '--resource-group', resource_group,
@@ -572,7 +572,7 @@ def get_environment_variables(resource: Dict[str, Any], subscription_id: str, de
                 env_vars['connectionStrings'] = {cs.get('name'): cs.get('value') for cs in conn_strings if isinstance(cs, dict) and cs.get('name')}
         
         # Function Apps - Use comprehensive configuration
-        elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() == 'functionapp':
+        elif 'microsoft.web/sites' in resource_type and 'functionapp' in resource.get('kind', '').lower():
             if detailed_resource_data and 'functionAppConfig' in detailed_resource_data:
                 # Use pre-fetched comprehensive Function App data
                 func_config = detailed_resource_data['functionAppConfig']
@@ -853,7 +853,7 @@ def get_resource_specific_config(resource: Dict[str, Any], subscription_id: str,
                 })
         
         # Function Apps - Use comprehensive configuration data
-        elif 'microsoft.web/sites' in resource_type and resource.get('kind', '').lower() == 'functionapp':
+        elif 'microsoft.web/sites' in resource_type and 'functionapp' in resource.get('kind', '').lower():
             if detailed_resource_data and 'functionAppConfig' in detailed_resource_data:
                 # Use pre-fetched comprehensive Function App data
                 func_config = detailed_resource_data['functionAppConfig']
@@ -1082,7 +1082,7 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_g
             
             # Fetch detailed resource data once for VM/VMSS/Function Apps to avoid duplicate API calls
             detailed_resource_data = None
-            if resource_type in ['microsoft.compute/virtualmachines', 'microsoft.compute/virtualmachinescalesets'] or (resource_type == 'microsoft.web/sites' and resource.get('kind', '').lower() == 'functionapp'):
+            if resource_type in ['microsoft.compute/virtualmachines', 'microsoft.compute/virtualmachinescalesets'] or (resource_type == 'microsoft.web/sites' and 'functionapp' in resource.get('kind', '').lower()):
                 resource_group = resource.get('resourceGroup', '')
                 resource_name = resource.get('name', '')
                 
@@ -1101,7 +1101,7 @@ def list_resources(subscription_id: str, enhanced_mode: bool = False, resource_g
                                 '--resource-group', resource_group,
                                 '--name', resource_name
                             ], subscription_id)
-                        elif resource_type == 'microsoft.web/sites' and resource.get('kind', '').lower() == 'functionapp':
+                        elif resource_type == 'microsoft.web/sites' and 'functionapp' in resource.get('kind', '').lower():
                             # Get comprehensive Function App configuration
                             function_app_config = get_function_app_full_config(resource_group, resource_name, subscription_id)
                             detailed_resource_data = {'functionAppConfig': function_app_config}
@@ -1345,7 +1345,7 @@ def get_resource_dependencies(subscription_id: str, resources: List[Dict[str, An
         
         elif resource_type == 'microsoft.web/sites':
             # Separate handling for Web Apps vs Function Apps
-            is_function_app = resource.get('kind', '').lower() == 'functionapp'
+            is_function_app = 'functionapp' in resource.get('kind', '').lower()
             
             if is_function_app:
                 # Function App specific dependency detection
@@ -1866,8 +1866,8 @@ def main():
         
         try:
             with open(data_file, 'w') as f:
-                json.dump(data, f, indent=2)
-                #json.dump(remove_none(data), f, indent=2)
+                #json.dump(data, f, indent=2)
+                json.dump(remove_none(data), f, indent=2)
             print(f"Resource data saved to {data_file}")
             if not args.enhanced_mode:
                 print(f"Enhanced data includes network info, environment variables, and detailed configurations")
